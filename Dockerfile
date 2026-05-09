@@ -1,5 +1,13 @@
 FROM nikolaik/python-nodejs:python3.11-nodejs20
 
+# Optional build-time mirrors for intranet/offline build environments.
+# Defaults preserve the current public-network build behavior.
+ARG APT_MIRROR=""
+ARG PIP_INDEX_URL=""
+ARG PIP_EXTRA_INDEX_URL=""
+ARG PIP_TRUSTED_HOST=""
+ARG NPM_REGISTRY="https://registry.npmmirror.com"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -22,6 +30,28 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /opt/hermes-offline
 
+RUN set -eux; \
+    if [ -n "$APT_MIRROR" ]; then \
+      echo "Using custom APT mirror: $APT_MIRROR"; \
+      if [ -f /etc/apt/sources.list ]; then \
+        sed -i -E "s|https?://[^ ]+/(debian|ubuntu)|${APT_MIRROR}|g" /etc/apt/sources.list; \
+      fi; \
+      if [ -d /etc/apt/sources.list.d ]; then \
+        find /etc/apt/sources.list.d -type f \( -name '*.list' -o -name '*.sources' \) -print0 \
+          | xargs -0 -r sed -i -E "s|https?://[^ ]+/(debian|ubuntu)|${APT_MIRROR}|g"; \
+      fi; \
+    fi; \
+    if [ -n "$PIP_INDEX_URL" ]; then \
+      python -m pip config --global set global.index-url "$PIP_INDEX_URL"; \
+    fi; \
+    if [ -n "$PIP_EXTRA_INDEX_URL" ]; then \
+      python -m pip config --global set global.extra-index-url "$PIP_EXTRA_INDEX_URL"; \
+    fi; \
+    if [ -n "$PIP_TRUSTED_HOST" ]; then \
+      python -m pip config --global set global.trusted-host "$PIP_TRUSTED_HOST"; \
+    fi; \
+    npm config set registry "$NPM_REGISTRY"
+
 COPY hermes-agent ./hermes-agent
 COPY hermes-webui ./hermes-webui
 COPY README.md ./README.md
@@ -34,7 +64,6 @@ RUN python -m venv /opt/hermes-offline/.venv \
     && npm config set fetch-retry-factor 2 \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
-    && npm config set registry https://registry.npmmirror.com \
     && if [ -f ./hermes-agent/package-lock.json ]; then (cd ./hermes-agent && npm ci --omit=dev --ignore-scripts); else (cd ./hermes-agent && npm install --omit=dev --ignore-scripts); fi
 
 COPY scripts/start.sh ./scripts/start.sh

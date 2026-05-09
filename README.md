@@ -51,6 +51,29 @@ API_SERVER_KEY=your-secure-api-key
 docker build -t hermes-offline:latest .
 ```
 
+### 使用内网源构建镜像
+
+如果需要在内网环境重新构建镜像，可以通过 Docker build 参数指定内网源地址。下面的地址是占位示例，请替换成你自己的内网源：
+
+```bash
+docker build \
+  --build-arg APT_MIRROR="http://你的内网apt源/debian" \
+  --build-arg PIP_INDEX_URL="http://你的内网pip源/simple" \
+  --build-arg PIP_TRUSTED_HOST="你的内网pip源域名或IP" \
+  --build-arg NPM_REGISTRY="http://你的内网npm源" \
+  -t hermes-offline:latest .
+```
+
+如果你的 pip 源还需要额外索引，也可以加：
+
+```bash
+--build-arg PIP_EXTRA_INDEX_URL="http://你的额外pip源/simple"
+```
+
+这些参数都是可选的。不传任何参数时，仍使用默认外网构建行为：pip 使用默认配置，npm 使用 `https://registry.npmmirror.com`。
+
+> 注意：这些参数只影响 `docker build` 阶段，容器启动阶段仍不会执行 `pip install` / `npm install` / `apt install`，因此运行阶段可以离线启动。
+
 ### 直接启动
 
 ```bash
