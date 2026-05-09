@@ -1,5 +1,5 @@
 """
-DiAgent Web UI -- Shared configuration, constants, and global state.
+Hermes Web UI -- Shared configuration, constants, and global state.
 Imported by all other api/* modules and by server.py.
 
 Discovery order for all paths:
@@ -54,7 +54,7 @@ PROJECTS_FILE = STATE_DIR / "projects.json"
 logger = logging.getLogger(__name__)
 
 
-# ── DiAgent directory discovery ─────────────────────────────────────────
+# ── Hermes agent directory discovery ─────────────────────────────────────────
 def _discover_agent_dir() -> Path:
     """
     Locate the hermes-agent checkout using a multi-strategy search.
@@ -109,7 +109,7 @@ def _discover_agent_dir() -> Path:
 
 def _discover_python(agent_dir: Path) -> str:
     """
-    Locate a Python executable that has the DiAgent dependencies installed.
+    Locate a Python executable that has the Hermes agent dependencies installed.
 
     Priority:
       1. HERMES_WEBUI_PYTHON env var
@@ -158,19 +158,19 @@ def _discover_python(agent_dir: Path) -> str:
 _AGENT_DIR = _discover_agent_dir()
 PYTHON_EXE = _discover_python(_AGENT_DIR)
 
-# ── Inject agent dir into sys.path so DiAgent modules are importable ──────────
+# ── Inject agent dir into sys.path so Hermes modules are importable ──────────
 
 # When users (or CI builds) run `pip install --target .` or
 # `pip install -t .` inside the hermes-agent checkout, third-party
 # package directories (openai/, pydantic/, requests/, etc.) end up
-# alongside real DiAgent source files.  Putting _AGENT_DIR at the
+# alongside real Hermes source files.  Putting _AGENT_DIR at the
 # FRONT of sys.path means Python resolves `import pydantic` from that
 # local directory — which breaks whenever the host platform differs
 # from the container (e.g. macOS .so files inside a Linux image).
 #
 # Fix: insert _AGENT_DIR at the END of sys.path.  Python searches
 # entries in order, so site-packages resolves pip packages correctly,
-# and DiAgent-specific modules (run_agent, hermes/, etc.) still
+# and Hermes-specific modules (run_agent, hermes/, etc.) still
 # resolve because they do not exist in site-packages.
 
 if _AGENT_DIR is not None:
@@ -341,7 +341,7 @@ def _save_yaml_config_file(config_path: Path, config_data: dict) -> None:
     try:
         import yaml as _yaml
     except ImportError as exc:
-        raise RuntimeError("PyYAML is required to write DiAgent config.yaml") from exc
+        raise RuntimeError("PyYAML is required to write Hermes config.yaml") from exc
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
@@ -435,7 +435,7 @@ def print_startup_config() -> None:
 
     lines = [
         "",
-        "  DiAgent Web UI -- startup config",
+        "  Hermes Web UI -- startup config",
         "  --------------------------------",
         f"  repo root   : {REPO_ROOT}",
         f"  agent dir   : {_AGENT_DIR if _AGENT_DIR else 'NOT FOUND'}  {ok if _AGENT_DIR else err}",
@@ -450,7 +450,7 @@ def print_startup_config() -> None:
 
     if not _HERMES_FOUND:
         print(
-            f"{err}  Could not find the DiAgent directory.\n"
+            f"{err}  Could not find the Hermes agent directory.\n"
             "      The server will start but agent features will not work.\n"
             "\n"
             "      To fix, set one of:\n"
@@ -465,7 +465,7 @@ def print_startup_config() -> None:
 
 def verify_hermes_imports() -> tuple:
     """
-    Attempt to import the key DiAgent modules.
+    Attempt to import the key Hermes modules.
     Returns (ok: bool, missing: list[str], errors: dict[str, str]).
     """
     required = ["run_agent"]
@@ -631,7 +631,7 @@ _FALLBACK_MODELS = [
     {"provider": "OpenRouter", "id": "arcee-ai/trinity-large-preview:free",         "label": "Trinity Large Preview (free)"},
 ]
 
-# Provider display names for known DiAgent provider IDs
+# Provider display names for known Hermes provider IDs
 _PROVIDER_DISPLAY = {
     "nous": "Nous Portal",
     "openrouter": "OpenRouter",
@@ -1729,7 +1729,7 @@ def model_with_provider_context(model_id: str, model_provider: str | None = None
 
 
 def get_effective_default_model(config_data: dict | None = None) -> str:
-    """Resolve the effective DiAgent default model from config, then env overrides."""
+    """Resolve the effective Hermes default model from config, then env overrides."""
     active_cfg = config_data if config_data is not None else cfg
     default_model = DEFAULT_MODEL
 
@@ -1843,7 +1843,7 @@ def set_reasoning_effort(effort: str) -> dict:
 
 
 def set_hermes_default_model(model_id: str) -> dict:
-    """Persist the DiAgent default model in config.yaml and reload runtime config."""
+    """Persist the Hermes default model in config.yaml and reload runtime config."""
     selected_model = str(model_id or "").strip()
     if not selected_model:
         raise ValueError("model is required")
@@ -1972,7 +1972,7 @@ _models_cache_path = STATE_DIR / "models_cache.json"
 
 
 def _get_auth_store_path() -> Path:
-    """Return the auth.json path for the active DiAgent profile."""
+    """Return the auth.json path for the active Hermes profile."""
     try:
         from api.profiles import get_active_hermes_home as _gah
 
@@ -2287,13 +2287,13 @@ def _get_label_for_model(model_id: str, existing_groups: list) -> str:
 
 
 def _read_live_provider_model_ids(provider_id: str) -> list[str]:
-    """Return live model IDs from DiAgent CLI for a provider, or [] on failure.
+    """Return live model IDs from Hermes CLI for a provider, or [] on failure.
 
     WebUI's static ``_PROVIDER_MODELS`` table is only a fallback.  The agent CLI
     owns the provider registry and catalog-discovery logic, so ordinary picker
     groups should ask ``hermes_cli.models.provider_model_ids()`` first (#1240).
     Provider aliases are tried as a secondary lookup because WebUI keeps a few
-    display-facing IDs (for example ``google`` / ``x-ai``) that DiAgent CLI may
+    display-facing IDs (for example ``google`` / ``x-ai``) that Hermes CLI may
     normalize internally.
     """
     pid = str(provider_id or "").strip()
@@ -2331,7 +2331,7 @@ def _read_live_provider_model_ids(provider_id: str) -> list[str]:
 
 
 def _models_from_live_provider_ids(provider_id: str, live_ids: list[str]) -> list[dict]:
-    """Convert DiAgent CLI model ids into WebUI picker model entries."""
+    """Convert Hermes CLI model ids into WebUI picker model entries."""
     formatter = _format_ollama_label if provider_id in ("ollama", "ollama-cloud") else None
     models: list[dict] = []
     seen: set[str] = set()
@@ -3322,7 +3322,7 @@ def get_available_models() -> dict:
 
                     # User-configured model allowlists are explicit local
                     # source-of-truth and should still beat auto-discovery.
-                    # Otherwise, ask DiAgent CLI first so WebUI tracks the same
+                    # Otherwise, ask Hermes CLI first so WebUI tracks the same
                     # live catalog as the agent/CLI picker; WebUI's static
                     # _PROVIDER_MODELS table is now a fallback only (#1240).
                     if isinstance(provider_cfg, dict) and "models" in provider_cfg:
@@ -3686,7 +3686,7 @@ _SETTINGS_DEFAULTS = {
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
     "language": "en",  # UI locale code; must match a key in static/i18n.js LOCALES
     "bot_name": os.getenv(
-        "HERMES_WEBUI_BOT_NAME", "DiAgent"
+        "HERMES_WEBUI_BOT_NAME", "Hermes"
     ),  # display name for the assistant
     "sound_enabled": False,  # play notification sound when assistant finishes
     "notifications_enabled": False,  # browser notification when tab is in background

@@ -430,7 +430,7 @@ async function saveDashboardSettings(){
     else if(typeof showToast==='function') showToast('Dashboard link settings failed to save.');
   }
 }
-function openDiAgentDashboard(event){
+function openHermesDashboard(event){
   if(event){event.preventDefault();event.stopPropagation();}
   const btn=event&&event.currentTarget?event.currentTarget:document.querySelector('[data-dashboard-link]');
   const url=(btn&&btn.dataset&&btn.dataset.dashboardUrl)||_dashboardBrowserUrl(_dashboardStatusCache);
@@ -3669,7 +3669,7 @@ document.addEventListener('visibilitychange',_syncSystemHealthMonitorVisibility)
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',startSystemHealthMonitor);
 else startSystemHealthMonitor();
 
-// ── DiAgent/gateway heartbeat alert (#716) ──
+// ── Hermes agent/gateway heartbeat alert (#716) ──
 const AGENT_HEALTH_INTERVAL_MS=30000;
 const AGENT_HEALTH_DISMISSED_KEY='agent-health-dismissed';
 let _agentHealthTimer=null;
@@ -3995,7 +3995,7 @@ function syncTopbar(){
     if(typeof _syncWorkspaceHeadingState==='function') _syncWorkspaceHeadingState();
     if(typeof syncModelChip==='function') syncModelChip();
     if(typeof syncTerminalButton==='function') syncTerminalButton();
-    if(typeof _syncDiAgentPanelSessionActions==='function') _syncDiAgentPanelSessionActions();
+    if(typeof _syncHermesPanelSessionActions==='function') _syncHermesPanelSessionActions();
     else {
       const sidebarName=$('sidebarWsName');
       if(sidebarName && sidebarName.textContent==='Workspace'){
@@ -4095,7 +4095,7 @@ function syncTopbar(){
   // Show Clear button only when session has messages
   const clearBtn=$('btnClearConv');
   if(clearBtn) clearBtn.style.display=(S.messages&&S.messages.filter(msg=>msg.role!=='tool').length>0)?'':'none';
-  if(typeof _syncDiAgentPanelSessionActions==='function') _syncDiAgentPanelSessionActions();
+  if(typeof _syncHermesPanelSessionActions==='function') _syncHermesPanelSessionActions();
   if(typeof syncWorkspaceDisplays==='function') syncWorkspaceDisplays();
   if(typeof syncTerminalButton==='function') syncTerminalButton();
   // modelSelect already set above
@@ -5056,7 +5056,7 @@ function renderMessages(options){
     };
     S.messages.forEach(m=>{
       if(!m) return;
-      // OpenAI / DiAgent CLI format: role=tool with tool_call_id
+      // OpenAI / Hermes CLI format: role=tool with tool_call_id
       if(m.role==='tool'){
         const tid=m.tool_call_id||m.tool_use_id||'';
         if(tid) resultsByTid[tid]=_snipFromRaw(m.content);
