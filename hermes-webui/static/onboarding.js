@@ -219,7 +219,7 @@ function _renderOnboardingProviderOAuthField(provider){
     <div class="onboarding-oauth-icon">🔑</div>
     <div style="flex:1">
       <strong>Use Claude Code OAuth instead</strong>
-      <p style="margin-top:6px;color:var(--muted);font-size:13px"><strong>Claude Code subscription credentials are not the same as an Anthropic API key.</strong> Use this path only when you want Hermes to use Claude Code credentials already available on the server, or start a short polling flow while you complete <code>claude setup-token</code> on the host.</p>
+      <p style="margin-top:6px;color:var(--muted);font-size:13px"><strong>Claude Code subscription credentials are not the same as an Anthropic API key.</strong> Use this path only when you want DiAgent to use Claude Code credentials already available on the server, or start a short polling flow while you complete <code>claude setup-token</code> on the host.</p>
       <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="sm-btn" id="anthropicOAuthBtn" onclick="startAnthropicOAuth()" type="button">Login with Claude Code</button></div>
       <div id="anthropicOAuthFlow" style="display:none;margin-top:12px"></div>
     </div>
@@ -625,7 +625,7 @@ async function _pollCodexOAuth(){
     _codexOAuthFlowId=null;
     _setCodexOAuthButton(true);
     if(status==='success'){
-      _renderCodexOAuthTerminal('success','Credentials saved to the Hermes credential pool. Refreshing provider status…');
+      _renderCodexOAuthTerminal('success','Credentials saved to the DiAgent credential pool. Refreshing provider status…');
       showToast(t('oauth_codex_success'));
       try{await loadOnboardingWizard();}catch(e){}
     }else if(status==='expired'){
@@ -736,7 +736,7 @@ async function _pollAnthropicOAuth(){
     _anthropicOAuthFlowId=null;
     _setAnthropicOAuthButton(true);
     if(status==='success'){
-      _renderAnthropicOAuthTerminal('success','Hermes is now linked to Claude Code credentials. Refreshing provider status…');
+      _renderAnthropicOAuthTerminal('success','DiAgent is now linked to Claude Code credentials. Refreshing provider status…');
       showToast('Claude Code OAuth linked');
       try{await loadOnboardingWizard();}catch(e){}
     }else if(status==='expired'){
@@ -761,7 +761,7 @@ async function startAnthropicOAuth(){
   _anthropicOAuthFlowId=null;
   _setAnthropicOAuthButton(false);
   flowDiv.style.display='block';
-  flowDiv.innerHTML=`<div class="onboarding-oauth-card onboarding-oauth-pending"><div class="onboarding-oauth-icon">⏳</div><div><strong>Checking Claude Code credentials…</strong><p>Hermes is checking for existing Claude Code OAuth credentials on this server.</p></div></div>`;
+  flowDiv.innerHTML=`<div class="onboarding-oauth-card onboarding-oauth-pending"><div class="onboarding-oauth-icon">⏳</div><div><strong>Checking Claude Code credentials…</strong><p>DiAgent is checking for existing Claude Code OAuth credentials on this server.</p></div></div>`;
   try{
     const resp=await api('/api/onboarding/oauth/start',{method:'POST',body:JSON.stringify({provider:'anthropic'})});
     if(resp.error) throw new Error(resp.error);
@@ -772,7 +772,7 @@ async function startAnthropicOAuth(){
       _clearAnthropicOAuthPoll();
       _anthropicOAuthFlowId=null;
       _setAnthropicOAuthButton(true);
-      _renderAnthropicOAuthTerminal('success','Hermes is now linked to Claude Code credentials. Refreshing provider status…');
+      _renderAnthropicOAuthTerminal('success','DiAgent is now linked to Claude Code credentials. Refreshing provider status…');
       showToast('Claude Code OAuth linked');
       try{await loadOnboardingWizard();}catch(e){}
       return;
@@ -782,7 +782,7 @@ async function startAnthropicOAuth(){
         <div class="onboarding-oauth-icon">🖥️</div>
         <div style="flex:1">
           <strong>Complete Claude Code login on this host</strong>
-          <p style="margin-top:6px">${esc(action_required||"Run 'claude setup-token' on the server, then return here. Hermes will detect the credential automatically.")}</p>
+          <p style="margin-top:6px">${esc(action_required||"Run 'claude setup-token' on the server, then return here. DiAgent will detect the credential automatically.")}</p>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
             <code style="display:inline-block;background:rgba(255,255,255,.08);padding:6px 10px;border-radius:8px;user-select:all">claude setup-token</code>
             <button class="sm-btn" type="button" onclick="cancelAnthropicOAuth()">Cancel</button>
