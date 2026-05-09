@@ -581,10 +581,17 @@ class APIServerAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.API_SERVER)
         extra = config.extra or {}
-        self._host: str = extra.get("host", os.getenv("API_SERVER_HOST", DEFAULT_HOST))
+        self._host: str = extra.get(
+            "host",
+            os.getenv("HERMES_AGENT_HOST")
+            or os.getenv("API_SERVER_HOST", DEFAULT_HOST),
+        )
         raw_port = extra.get("port")
         if raw_port is None:
-            raw_port = os.getenv("API_SERVER_PORT", str(DEFAULT_PORT))
+            raw_port = (
+                os.getenv("HERMES_AGENT_PORT")
+                or os.getenv("API_SERVER_PORT", str(DEFAULT_PORT))
+            )
         self._port: int = _coerce_port(raw_port, DEFAULT_PORT)
         self._api_key: str = extra.get("key", os.getenv("API_SERVER_KEY", ""))
         self._cors_origins: tuple[str, ...] = self._parse_cors_origins(

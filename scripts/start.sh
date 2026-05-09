@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+log() {
+  printf '[hermes-offline] %s\n' "$*"
+}
+
+shutdown() {
+  local code=${1:-0}
+  log "Shutting down services (exit code: ${code})..."
+  if [[ -n "${AGENT_PID:-}" ]] && kill -0 "${AGENT_PID}" 2>/dev/null; then
+    kill "${AGENT_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${WEBUI_PID:-}" ]] && kill -0 "${WEBUI_PID}" 2>/dev/null; then
+    kill "${WEBUI_PID}" 2>/dev/null || true
+  fi
+  wait 2>/dev/null || true
+  exit "${code}"
+}
+
+trap 'shutdown 143' TERM INT
+
+export HERMES_HOME="${HERMES_HOME:-/home/hermes/.hermes}"
+export HERMES_WORKSPACE="${HERMES_WORKSPACE:-/home/hermes/workspace}"
+export HERMES_AGENT_HOST="${HERMES_AGENT_HOST:-0.0.0.0}"
+export HERMES_AGENT_PORT="${HERMES_AGENT_PORT:-5000}"
+export HERMES_WEBUI_HOST="${HERMES_WEBUI_HOST:-0.0.0.0}"
+export HERMES_WEBUI_PORT="${HERMES_WEBUI_PORT:-18789}"
+
+# Hermes Agent's API server still supports the historical API_SERVER_* names.
+# Keep both sets in sync so old and new config paths work.
+export API_SERVER_ENABLED="${API_SERVER_ENABLED:-true}"
+export API_SERVER_KEY="${API_SERVER_KEY:-hermes-offline-default-api-key-please-change-2026}"
+export API_SERVER_HOST="${API_SERVER_HOST:-${HERMES_AGENT_HOST}}"
+export API_SERVER_PORT="${API_SERVER_PORT:-${HERMES_AGENT_PORT}}"
+export API_SERVER_CORS_ORIGINS="${API_SERVER_CORS_ORIGINS:-http://localhost:${HERMES_WEBUI_PORT},http://127.0.0.1:${HERMES_WEBUI_PORT}}"
+export HERMES_WEBUI_AGENT_DIR="${HERMES_WEBUI_AGENT_DIR:-/opt/hermes-offline/hermes-agent}"
+export HERMES_WEBUI_PYTHON="${HERMES_WEBUI_PYTHON:-/opt/hermes-offline/.venv/bin/python}"
+export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HERMES_HOME}/webui}"
+export HERMES_WEBUI_SKIP_ONBOARDING="${HERMES_WEBUI_SKIP_ONBOARDING:-1}"
+export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-${HERMES_WORKSPACE}}"
+
+mkdir -p "${HERMES_HOME}" "${HERMES_WORKSPACE}" "${HERMES_WEBUI_STATE_DIR}"
+
+cd /opt/hermes-offline
+
+log "Hermes home: ${HERMES_HOME}"
+log "Workspace: ${HERMES_WORKSPACE}"
+log "Starting Hermes Agent API server on ${API_SERVER_HOST}:${API_SERVER_PORT}..."
+/opt/hermes-offline/.venv/bin/python -m gateway.run &
+AGENT_PID=$!
+log "Hermes Agent PID: ${AGENT_PID}"
+
+log "Starting Hermes WebUI on ${HERMES_WEBUI_HOST}:${HERMES_WEBUI_PORT}..."
+(
+  cd /opt/hermes-offline/hermes-webui
+  exec /opt/hermes-offline/.venv/bin/python server.py
+) &
+WEBUI_PID=$!
+log "Hermes WebUI PID: ${WEBUI_PID}"
+
+log "Startup complete. WebUI: http://localhost:${HERMES_WEBUI_PORT} ; Agent API: http://localhost:${API_SERVER_PORT}/health"
+
+set +e
+while true; do
+  if ! kill -0 "${AGENT_PID}" 2>/dev/null; then
+    wait "${AGENT_PID}"
+    code=$?
+    log "Hermes Agent exited unexpectedly with code ${code}."
+    shutdown "${code}"
+  fi
+  if ! kill -0 "${WEBUI_PID}" 2>/dev/null; then
+    wait "${WEBUI_PID}"
+    code=$?
+    log "Hermes WebUI exited unexpectedly with code ${code}."
+    shutdown "${code}"
+  fi
+  sleep 2
+done
