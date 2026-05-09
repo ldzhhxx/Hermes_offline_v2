@@ -40,22 +40,47 @@ export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HERMES_HOME}/webui}"
 export HERMES_WEBUI_SKIP_ONBOARDING="${HERMES_WEBUI_SKIP_ONBOARDING:-1}"
 export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-${HERMES_WORKSPACE}}"
 
+# Docker bind mounts created by `docker run -v ./data:/home/hermes/.hermes`
+# are commonly root-owned on the host. Start as root, create/chown the mounted
+# directories, then run the actual services as the unprivileged hermes user.
 mkdir -p "${HERMES_HOME}" "${HERMES_WORKSPACE}" "${HERMES_WEBUI_STATE_DIR}"
+if [[ "$(id -u)" == "0" ]]; then
+  log "Fixing ownership for mounted data directories..."
+  chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
+fi
 
 cd /opt/hermes-offline
+
+start_as_hermes() {
+  local workdir="$1"
+  shift
+  local cmd="cd $(printf '%q' "${workdir}") && exec"
+  local arg
+  for arg in "$@"; do
+    cmd+=" $(printf '%q' "${arg}")"
+  done
+
+  if [[ "$(id -u)" == "0" ]]; then
+    if command -v runuser >/dev/null 2>&1; then
+      runuser -u hermes -- bash -lc "${cmd}"
+    else
+      su -m -s /bin/bash hermes -c "${cmd}"
+    fi
+  else
+    cd "${workdir}"
+    exec "$@"
+  fi
+}
 
 log "Hermes home: ${HERMES_HOME}"
 log "Workspace: ${HERMES_WORKSPACE}"
 log "Starting Hermes Agent API server on ${API_SERVER_HOST}:${API_SERVER_PORT}..."
-/opt/hermes-offline/.venv/bin/python -m gateway.run &
+start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python -m gateway.run &
 AGENT_PID=$!
 log "Hermes Agent PID: ${AGENT_PID}"
 
 log "Starting Hermes WebUI on ${HERMES_WEBUI_HOST}:${HERMES_WEBUI_PORT}..."
-(
-  cd /opt/hermes-offline/hermes-webui
-  exec /opt/hermes-offline/.venv/bin/python server.py
-) &
+start_as_hermes /opt/hermes-offline/hermes-webui /opt/hermes-offline/.venv/bin/python server.py &
 WEBUI_PID=$!
 log "Hermes WebUI PID: ${WEBUI_PID}"
 
