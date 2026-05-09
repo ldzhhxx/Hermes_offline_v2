@@ -7,6 +7,23 @@
 
 该版本以离线适配为目标，整合了 Hermes Agent 与 Hermes Web UI 的离线部署内容。
 
+## 离线内置技能集
+
+此离线版本已精简内置 skills：默认移除了依赖公网 API、云服务、社交平台、在线搜索、GitHub、HuggingFace、在线媒体等能力的技能，并新增 `offline-office` 分类，面向内网/无公网环境下的办公场景。
+
+新增离线办公技能包括：
+
+- `offline-document-drafting`：离线文档起草、润色、摘要与改写
+- `local-spreadsheet-csv-analysis`：本地 CSV/TSV 表格分析与清洗
+- `meeting-minutes-offline`：本地会议记录整理成纪要、决议和待办
+- `local-file-organization`：本地文件整理、目录规划和归档建议
+- `offline-report-builder`：基于本地资料生成报告和执行摘要
+- `local-markdown-workflow`：Markdown 文档创建、合并、拆分和校对
+- `local-presentation-outline`：离线汇报/PPT 大纲和讲稿生成
+- `local-text-data-cleaning`：本地文本、日志、JSONL/CSV 数据清洗
+
+这些技能默认不要求联网，也不会建议在使用阶段执行 `pip install`、`npm install` 或调用公网服务。实际模型推理仍需要可访问的模型服务；在内网部署时请配置内网 OpenAI-compatible、Ollama、vLLM、LM Studio 等模型端点。
+
 ## Docker 离线部署
 
 本仓库根目录提供一体化 Docker 镜像构建文件：
