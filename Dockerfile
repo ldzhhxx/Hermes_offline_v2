@@ -25,7 +25,6 @@ WORKDIR /opt/hermes-offline
 COPY hermes-agent ./hermes-agent
 COPY hermes-webui ./hermes-webui
 COPY README.md ./README.md
-COPY scripts/start.sh ./scripts/start.sh
 
 RUN python -m venv /opt/hermes-offline/.venv \
     && /opt/hermes-offline/.venv/bin/python -m pip install --upgrade pip setuptools wheel \
@@ -36,8 +35,12 @@ RUN python -m venv /opt/hermes-offline/.venv \
     && npm config set fetch-retry-mintimeout 20000 \
     && npm config set fetch-retry-maxtimeout 120000 \
     && npm config set registry https://registry.npmmirror.com \
-    && if [ -f ./hermes-agent/package-lock.json ]; then (cd ./hermes-agent && npm ci --omit=dev --ignore-scripts); else (cd ./hermes-agent && npm install --omit=dev --ignore-scripts); fi \
-    && chmod +x /opt/hermes-offline/scripts/start.sh \
+    && if [ -f ./hermes-agent/package-lock.json ]; then (cd ./hermes-agent && npm ci --omit=dev --ignore-scripts); else (cd ./hermes-agent && npm install --omit=dev --ignore-scripts); fi
+
+COPY scripts/start.sh ./scripts/start.sh
+COPY scripts/start-dev.sh ./scripts/start-dev.sh
+
+RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/start-dev.sh \
     && touch /.within_container
 
 RUN useradd --create-home --home-dir /home/hermes --shell /bin/bash hermes \

@@ -88,6 +88,88 @@ docker compose up -d
 docker logs -f hermes-offline
 ```
 
+## Docker 开发模式
+
+如果你后期需要频繁修改 `hermes-agent` 或 `hermes-webui` 代码，不必每次小改都重新打镜像。本仓库提供开发模式：
+
+- `docker-compose.dev.yml`：把本地源码目录挂载进容器
+- `scripts/start-dev.sh`：启动 Agent 和 WebUI，并轮询源码变化
+- 当检测到 Python / JS / HTML / CSS / 配置文件变化时，自动重启 Agent 和 WebUI
+
+> 注意：首次进入开发模式前仍需要先构建一次基础镜像。后续只改业务代码通常不需要重新 build；如果改了依赖文件，例如 `pyproject.toml`、`requirements.txt`、`package.json`、`package-lock.json`，建议重新执行 `docker build`。
+
+### 构建开发基础镜像
+
+```bash
+docker build -t hermes-offline:latest .
+```
+
+### 启动开发模式
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+```
+
+如果你的机器没有 Docker Compose 插件，也可以用 `docker run` 启动开发模式：
+
+```bash
+docker run -d \
+  --name hermes-offline-dev \
+  --entrypoint /opt/hermes-offline/scripts/start-dev.sh \
+  -p 18789:18789 \
+  -p 5000:5000 \
+  -v $(pwd)/hermes-agent:/opt/hermes-offline/hermes-agent \
+  -v $(pwd)/hermes-webui:/opt/hermes-offline/hermes-webui \
+  -v $(pwd)/scripts:/opt/hermes-offline/scripts \
+  -v $(pwd)/data:/home/hermes/.hermes \
+  -v $(pwd)/workspace:/home/hermes/workspace \
+  hermes-offline:latest
+```
+
+### 查看开发模式日志
+
+```bash
+docker logs -f hermes-offline-dev
+```
+
+看到类似日志说明开发模式已经启动：
+
+```bash
+[hermes-offline-dev] Watching source directories for changes every 2s
+[hermes-offline-dev] Dev mode ready. WebUI: http://localhost:18789
+```
+
+### 修改代码后的生效方式
+
+开发模式会挂载本地源码：
+
+```bash
+./hermes-agent  -> /opt/hermes-offline/hermes-agent
+./hermes-webui  -> /opt/hermes-offline/hermes-webui
+./scripts       -> /opt/hermes-offline/scripts
+```
+
+因此你在宿主机修改代码后，容器内能直接看到变更。`scripts/start-dev.sh` 会每隔 2 秒检测源码变化，并自动重启 Agent 和 WebUI。
+
+常见情况：
+
+- 修改 `hermes-agent/**/*.py`：自动重启后生效
+- 修改 `hermes-webui/**/*.py`：自动重启后生效
+- 修改 WebUI 静态资源，如 `.js` / `.html` / `.css`：自动重启后刷新浏览器生效
+- 修改依赖文件，如 `pyproject.toml` / `requirements.txt` / `package.json`：需要重新 build 镜像
+
+### 停止开发模式
+
+```bash
+docker rm -f hermes-offline-dev
+```
+
+如果使用 Docker Compose：
+
+```bash
+docker compose -f docker-compose.dev.yml down
+```
+
 ### 访问地址
 
 ```bash
