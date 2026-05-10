@@ -1,97 +1,120 @@
-# Hermes_offline_v2
+<div align="center">
 
-本仓库为 Hermes 离线版改造项目，包含两个子项目目录：
+# 🛰️ Hermes Offline v2
 
-- `hermes-agent`：原 `hermes-agent-main` 改名而来
-- `hermes-webui`：原 `hermes-webui-master` 改名而来
+**面向内网与无公网环境的 Hermes 一体化离线部署方案**
 
-该版本以离线适配为目标，整合了 Hermes Agent 与 Hermes Web UI 的离线部署内容。
+![Deployment](https://img.shields.io/badge/Deployment-Docker%20一体化-0db7ed?style=flat-square)
+![Mode](https://img.shields.io/badge/Runtime-离线可运行-10b981?style=flat-square)
+![Skills](https://img.shields.io/badge/Skills-offline--office-8b5cf6?style=flat-square)
+![API](https://img.shields.io/badge/Agent%20API-:5000-f59e0b?style=flat-square)
+![WebUI](https://img.shields.io/badge/WebUI-:18789-ec4899?style=flat-square)
 
-## 离线内置技能集
+</div>
 
-此离线版本已精简内置 skills：默认移除了依赖公网 API、云服务、社交平台、在线搜索、GitHub、HuggingFace、在线媒体等能力的技能，并新增 `offline-office` 分类，面向内网/无公网环境下的办公场景。
+---
 
-新增离线办公技能包括：
+## ✨ 项目概览
 
-- `offline-document-drafting`：离线文档起草、润色、摘要与改写
-- `local-spreadsheet-csv-analysis`：本地 CSV/TSV 表格分析与清洗
-- `meeting-minutes-offline`：本地会议记录整理成纪要、决议和待办
-- `local-file-organization`：本地文件整理、目录规划和归档建议
-- `offline-report-builder`：基于本地资料生成报告和执行摘要
-- `local-markdown-workflow`：Markdown 文档创建、合并、拆分和校对
-- `local-presentation-outline`：离线汇报/PPT 大纲和讲稿生成
-- `local-text-data-cleaning`：本地文本、日志、JSONL/CSV 数据清洗
+Hermes Offline v2 是 Hermes 的**离线化改造版本**，把 Agent 后端与 Web UI 整合成一个可在**纯内网环境**中构建与运行的 Docker 镜像。项目针对以下场景做了系统性优化：
 
-这些技能默认不要求联网，也不会建议在使用阶段执行 `pip install`、`npm install` 或调用公网服务。实际模型推理仍需要可访问的模型服务；在内网部署时请配置内网 OpenAI-compatible、Ollama、vLLM、LM Studio 等模型端点。
+- 🏢 **内网 / 保密环境**：默认关闭对公网 API、云服务、社交平台、在线搜索等依赖
+- 📦 **一键部署**：单镜像同时启动 Agent API + WebUI，绑定持久化数据卷
+- 📝 **办公场景友好**：内置 `offline-office` 技能集，覆盖文档、表格、会议、报告等日常办公能力
+- 🔁 **开发友好**：提供热重载开发模式，改代码免重新构建镜像
 
-## Docker 离线部署
+> ℹ️ **关于模型推理**：本仓库本身不内置大模型。使用时仍需可达的模型服务，推荐在内网部署 OpenAI 兼容接口 / Ollama / vLLM / LM Studio，然后在 Hermes 中配置内网模型端点。
 
-本仓库根目录提供一体化 Docker 镜像构建文件：
+---
 
-- `Dockerfile`：构建包含 Python、Node.js、Hermes Agent、Hermes WebUI 及全部运行依赖的一体化镜像
-- `scripts/start.sh`：容器入口脚本，同时启动 Agent API 后端与 WebUI 前端
-- `docker-compose.yml`：本地持久化数据目录与端口映射配置
-- `.env.docker.example`：可选环境变量示例
+## 📁 仓库结构
 
-镜像构建阶段会完成 Python / Node 依赖安装；容器启动阶段不会执行 `pip install` 或 `npm install`，因此镜像构建完成后可以在无公网环境中直接运行。
+本仓库包含两个子项目目录：
 
-### 默认端口
+| 目录            | 说明                                  | 原项目名                 |
+| --------------- | ------------------------------------- | ------------------------ |
+| `hermes-agent`  | Hermes Agent 后端（Python / API）     | `hermes-agent-main`      |
+| `hermes-webui`  | Hermes Web UI 前端                     | `hermes-webui-master`    |
 
-```bash
-Hermes Agent API: 0.0.0.0:5000
-Hermes WebUI    : 0.0.0.0:18789
-```
+根目录提供一体化部署所需的构建与启动文件：
 
-可通过环境变量覆盖：
+| 文件                     | 用途                                              |
+| ------------------------ | ------------------------------------------------- |
+| `Dockerfile`             | 构建包含 Python、Node.js、Agent、WebUI 的镜像      |
+| `scripts/start.sh`       | 容器入口：同时启动 Agent API 与 WebUI              |
+| `scripts/start-dev.sh`   | 开发模式入口：监听源码变化并自动重启               |
+| `docker-compose.yml`     | 标准运行：端口映射 + 数据卷挂载                   |
+| `docker-compose.dev.yml` | 开发运行：把本地源码挂载进容器                    |
+| `.env.docker.example`    | 可选环境变量示例                                  |
 
-```bash
-HERMES_AGENT_HOST=0.0.0.0
-HERMES_AGENT_PORT=5000
-HERMES_WEBUI_HOST=0.0.0.0
-HERMES_WEBUI_PORT=18789
-```
+---
 
-Agent API 同时兼容原有变量：
+## 🚀 快速开始（3 步启动）
 
 ```bash
-API_SERVER_ENABLED=true
-API_SERVER_HOST=0.0.0.0
-API_SERVER_PORT=5000
-API_SERVER_KEY=your-secure-api-key
-```
-
-> 注意：Agent API 绑定 `0.0.0.0` 时需要 `API_SERVER_KEY`。镜像内提供了可运行的默认值，生产环境建议通过 `-e API_SERVER_KEY=...` 或 `.env` 替换。
-
-### 构建镜像
-
-```bash
+# 1) 构建镜像
 docker build -t hermes-offline:latest .
+
+# 2) 启动服务（数据与工作区自动持久化到宿主机）
+docker compose up -d
+
+# 3) 在浏览器访问
+http://localhost:18789
 ```
 
-### 使用内网源构建镜像
+> ✅ 镜像构建完成后，第 2、3 步可以在**完全离线**的环境中执行。
 
-如果需要在内网环境重新构建镜像，可以通过 Docker build 参数指定内网源地址。下面的地址是占位示例，请替换成你自己的内网源：
+### 默认访问地址
+
+| 服务              | 地址                        |
+| ----------------- | --------------------------- |
+| 🌐 Hermes WebUI    | `http://localhost:18789`    |
+| 🔌 Hermes Agent API | `http://localhost:5000`     |
+
+---
+
+## 🌐 构建期 vs 运行期的离线行为
+
+这是使用本项目时最需要明确的一件事：
+
+| 阶段            | 是否联网                    | 执行的动作                                             |
+| --------------- | --------------------------- | ------------------------------------------------------ |
+| 🛠️ `docker build` | **需要源可达**（公网或内网）| 安装 Python / Node 依赖、拷贝项目代码                  |
+| 🚀 容器运行时    | **无需任何联网**            | 直接启动 Agent 与 WebUI，**不会**执行 `pip install` / `npm install` / `apt install` |
+
+> 💡 因此常见做法是：在有网络的机器上构建镜像 → 导出 `docker save` → 在内网导入 `docker load` → 直接运行。
+
+---
+
+## 🧰 离线内置技能集（offline-office）
+
+本版本已**精简内置 skills**：移除了依赖公网 API、云服务、社交平台、在线搜索、GitHub、HuggingFace、在线媒体等能力的技能，新增 `offline-office` 分类，面向内网办公场景。
+
+| 技能 ID                         | 用途                                        |
+| ------------------------------- | ------------------------------------------- |
+| `offline-document-drafting`     | 📝 离线文档起草、润色、摘要、改写             |
+| `local-spreadsheet-csv-analysis`| 📊 本地 CSV / TSV 表格分析与清洗              |
+| `meeting-minutes-offline`       | 🗒️ 会议记录整理成纪要、决议和待办             |
+| `local-file-organization`       | 🗂️ 本地文件整理、目录规划、归档建议           |
+| `offline-report-builder`        | 📑 基于本地资料生成报告与执行摘要             |
+| `local-markdown-workflow`       | 🧾 Markdown 创建、合并、拆分、校对            |
+| `local-presentation-outline`    | 🎤 汇报 / PPT 大纲与讲稿生成                  |
+| `local-text-data-cleaning`      | 🧹 文本、日志、JSONL / CSV 数据清洗           |
+
+这些技能**默认不要求联网**，也不会建议在使用阶段执行 `pip install`、`npm install` 或调用公网服务。
+
+---
+
+## 🐳 Docker 部署详解
+
+### 方案 A：`docker compose`（推荐）
 
 ```bash
-docker build \
-  --build-arg APT_MIRROR="http://你的内网apt源/debian" \
-  --build-arg PIP_INDEX_URL="http://你的内网pip源/simple" \
-  --build-arg PIP_TRUSTED_HOST="你的内网pip源域名或IP" \
-  --build-arg NPM_REGISTRY="http://你的内网npm源" \
-  -t hermes-offline:latest .
+docker compose up -d
+docker logs -f hermes-offline
 ```
 
-如果你的 pip 源还需要额外索引，也可以加：
-
-```bash
---build-arg PIP_EXTRA_INDEX_URL="http://你的额外pip源/simple"
-```
-
-这些参数都是可选的。不传任何参数时，仍使用默认外网构建行为：pip 使用默认配置，npm 使用 `https://registry.npmmirror.com`。
-
-> 注意：这些参数只影响 `docker build` 阶段，容器启动阶段仍不会执行 `pip install` / `npm install` / `apt install`，因此运行阶段可以离线启动。
-
-### 直接启动
+### 方案 B：`docker run`
 
 ```bash
 docker run -d \
@@ -103,7 +126,7 @@ docker run -d \
   hermes-offline:latest
 ```
 
-如果需要设置自己的 Agent API Key：
+若需自定义 Agent API Key：
 
 ```bash
 docker run -d \
@@ -116,41 +139,105 @@ docker run -d \
   hermes-offline:latest
 ```
 
-### 使用 docker-compose 启动
+### 数据卷说明
+
+`docker-compose.yml` 默认挂载两个持久化目录：
+
+| 宿主机路径       | 容器内路径               | 作用                                             |
+| ---------------- | ------------------------ | ------------------------------------------------ |
+| `./data`         | `/home/hermes/.hermes`   | Hermes 配置、会话、WebUI 状态等持久化数据       |
+| `./workspace`    | `/home/hermes/workspace` | 容器内默认工作区                                  |
+
+### 启动脚本行为（`scripts/start.sh`）
+
+1. 创建 `/home/hermes/.hermes` 和 `/home/hermes/workspace`
+2. 启动 Hermes Agent API，监听 `${HERMES_AGENT_HOST}:${HERMES_AGENT_PORT}`
+3. 启动 Hermes WebUI，监听 `${HERMES_WEBUI_HOST}:${HERMES_WEBUI_PORT}`
+4. 前台运行，监控两个进程；任一服务异常退出时输出明确日志并退出容器
+
+---
+
+## ⚙️ 环境变量
+
+### 服务监听地址
+
+| 变量                   | 默认值      | 说明             |
+| ---------------------- | ----------- | ---------------- |
+| `HERMES_AGENT_HOST`    | `0.0.0.0`   | Agent API 绑定地址 |
+| `HERMES_AGENT_PORT`    | `5000`      | Agent API 端口    |
+| `HERMES_WEBUI_HOST`    | `0.0.0.0`   | WebUI 绑定地址    |
+| `HERMES_WEBUI_PORT`    | `18789`     | WebUI 端口        |
+
+### Agent API 兼容变量
+
+| 变量                     | 说明                                    |
+| ------------------------ | --------------------------------------- |
+| `API_SERVER_ENABLED`     | 是否启用 Agent API（`true` / `false`）  |
+| `API_SERVER_HOST`        | 同 `HERMES_AGENT_HOST`                  |
+| `API_SERVER_PORT`        | 同 `HERMES_AGENT_PORT`                  |
+| `API_SERVER_KEY`         | Agent API 鉴权密钥                      |
+
+> ⚠️ **安全提示**：当 Agent API 绑定 `0.0.0.0` 时**必须**设置 `API_SERVER_KEY`。镜像内提供了可运行默认值，**生产环境强烈建议通过 `-e API_SERVER_KEY=...` 或 `.env` 覆盖**。
+
+---
+
+## 🏗️ 使用内网源构建镜像
+
+如果构建环境完全无外网，可以通过 build args 指定内网镜像源（下方地址仅为占位示例，请替换为实际地址）：
 
 ```bash
-docker compose up -d
+docker build \
+  --build-arg APT_MIRROR="http://你的内网apt源/debian" \
+  --build-arg PIP_INDEX_URL="http://你的内网pip源/simple" \
+  --build-arg PIP_TRUSTED_HOST="你的内网pip源域名或IP" \
+  --build-arg NPM_REGISTRY="http://你的内网npm源" \
+  -t hermes-offline:latest .
 ```
 
-### 查看日志
+若 pip 还需要额外索引：
 
 ```bash
-docker logs -f hermes-offline
+--build-arg PIP_EXTRA_INDEX_URL="http://你的额外pip源/simple"
 ```
 
-## Docker 开发模式
+### Build Args 速查
 
-如果你后期需要频繁修改 `hermes-agent` 或 `hermes-webui` 代码，不必每次小改都重新打镜像。本仓库提供开发模式：
+| 参数                  | 作用                       | 不传时的默认行为                            |
+| --------------------- | -------------------------- | ------------------------------------------- |
+| `APT_MIRROR`          | 替换 Debian apt 源          | 使用镜像基础的默认 apt 源                    |
+| `PIP_INDEX_URL`       | 替换 pip 主索引            | 使用 pip 默认配置                            |
+| `PIP_EXTRA_INDEX_URL` | 增加 pip 备用索引（可选）   | 不配置                                       |
+| `PIP_TRUSTED_HOST`    | 将 pip 源标记为 trusted    | 按 pip 默认规则处理                          |
+| `NPM_REGISTRY`        | 替换 npm 源                 | `https://registry.npmmirror.com`             |
+
+> 🧊 所有 build args **只作用于 `docker build` 阶段**，运行阶段容器依然不会访问网络。
+
+---
+
+## 🛠️ 开发模式（热重载）
+
+适合频繁修改 `hermes-agent` 或 `hermes-webui` 源码，避免反复重建镜像。
+
+### 工作机制
 
 - `docker-compose.dev.yml`：把本地源码目录挂载进容器
-- `scripts/start-dev.sh`：启动 Agent 和 WebUI，并轮询源码变化
-- 当检测到 Python / JS / HTML / CSS / 配置文件变化时，自动重启 Agent 和 WebUI
+- `scripts/start-dev.sh`：每 2 秒检测源码变化，自动重启 Agent 和 WebUI
+- 监听文件类型：`.py` / `.js` / `.html` / `.css` / 相关配置文件
 
-> 注意：首次进入开发模式前仍需要先构建一次基础镜像。后续只改业务代码通常不需要重新 build；如果改了依赖文件，例如 `pyproject.toml`、`requirements.txt`、`package.json`、`package-lock.json`，建议重新执行 `docker build`。
-
-### 构建开发基础镜像
-
-```bash
-docker build -t hermes-offline:latest .
-```
+> 📌 **前置条件**：首次进入开发模式前仍需先 `docker build` 一次基础镜像。
+>
+> 📌 若修改了依赖文件（`pyproject.toml`、`requirements.txt`、`package.json`、`package-lock.json`），需要重新 `docker build`。
 
 ### 启动开发模式
 
+**方式 1：Docker Compose**
+
 ```bash
 docker compose -f docker-compose.dev.yml up -d
+docker logs -f hermes-offline-dev
 ```
 
-如果你的机器没有 Docker Compose 插件，也可以用 `docker run` 启动开发模式：
+**方式 2：docker run（无 Compose 插件时）**
 
 ```bash
 docker run -d \
@@ -166,76 +253,58 @@ docker run -d \
   hermes-offline:latest
 ```
 
-### 查看开发模式日志
+看到类似输出说明已就绪：
 
-```bash
-docker logs -f hermes-offline-dev
-```
-
-看到类似日志说明开发模式已经启动：
-
-```bash
+```text
 [hermes-offline-dev] Watching source directories for changes every 2s
 [hermes-offline-dev] Dev mode ready. WebUI: http://localhost:18789
 ```
 
+### 挂载映射
+
+| 宿主机             | 容器内                                 |
+| ------------------ | -------------------------------------- |
+| `./hermes-agent`   | `/opt/hermes-offline/hermes-agent`     |
+| `./hermes-webui`   | `/opt/hermes-offline/hermes-webui`     |
+| `./scripts`        | `/opt/hermes-offline/scripts`          |
+
 ### 修改代码后的生效方式
 
-开发模式会挂载本地源码：
-
-```bash
-./hermes-agent  -> /opt/hermes-offline/hermes-agent
-./hermes-webui  -> /opt/hermes-offline/hermes-webui
-./scripts       -> /opt/hermes-offline/scripts
-```
-
-因此你在宿主机修改代码后，容器内能直接看到变更。`scripts/start-dev.sh` 会每隔 2 秒检测源码变化，并自动重启 Agent 和 WebUI。
-
-常见情况：
-
-- 修改 `hermes-agent/**/*.py`：自动重启后生效
-- 修改 `hermes-webui/**/*.py`：自动重启后生效
-- 修改 WebUI 静态资源，如 `.js` / `.html` / `.css`：自动重启后刷新浏览器生效
-- 修改依赖文件，如 `pyproject.toml` / `requirements.txt` / `package.json`：需要重新 build 镜像
+| 修改内容                                           | 生效方式                       |
+| -------------------------------------------------- | ------------------------------ |
+| `hermes-agent/**/*.py`                             | 自动重启后生效                  |
+| `hermes-webui/**/*.py`                             | 自动重启后生效                  |
+| WebUI 静态资源（`.js` / `.html` / `.css`）          | 自动重启后刷新浏览器生效         |
+| 依赖文件（`pyproject.toml` / `package.json` 等）    | **需要重新 `docker build` 镜像** |
 
 ### 停止开发模式
 
 ```bash
+# 方式 1
 docker rm -f hermes-offline-dev
-```
 
-如果使用 Docker Compose：
-
-```bash
+# 方式 2
 docker compose -f docker-compose.dev.yml down
 ```
 
-### 访问地址
+---
+
+## 📜 日志与排查
 
 ```bash
-http://localhost:18789
+# 生产模式日志
+docker logs -f hermes-offline
+
+# 开发模式日志
+docker logs -f hermes-offline-dev
 ```
 
-### 数据目录
+任一服务异常退出时，入口脚本会输出明确日志并让容器退出，便于 Docker 自动重启策略或外部编排系统检测。
 
-`docker-compose.yml` 默认挂载：
+---
 
-```bash
-./data:/home/hermes/.hermes
-./workspace:/home/hermes/workspace
-```
+<div align="center">
 
-其中：
+**Hermes Offline v2 · 把 Agent 能力搬进内网**
 
-- `./data` 保存 Hermes 配置、会话、WebUI 状态等持久化数据
-- `./workspace` 作为容器内默认工作区
-
-### 启动脚本行为
-
-`scripts/start.sh` 会：
-
-1. 创建 `/home/hermes/.hermes` 和 `/home/hermes/workspace`
-2. 启动 Hermes Agent API 后端，监听 `${HERMES_AGENT_HOST}:${HERMES_AGENT_PORT}`
-3. 启动 Hermes WebUI，监听 `${HERMES_WEBUI_HOST}:${HERMES_WEBUI_PORT}`
-4. 保持容器前台运行
-5. 监控两个进程，任一服务异常退出时输出明确日志并退出容器
+</div>
