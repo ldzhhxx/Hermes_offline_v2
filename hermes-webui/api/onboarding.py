@@ -811,17 +811,47 @@ def apply_onboarding_setup(body: dict) -> dict:
     if not isinstance(model_cfg, dict):
         model_cfg = {}
 
-    model_cfg["provider"] = provider
-    model_cfg["default"] = _normalize_model_for_provider(provider, model)
+    # For yice (and any provider backed by a custom OpenAI-compatible endpoint),
+    # store as a custom_providers entry so the Hermes runtime can resolve it via
+    # _get_named_custom_provider → _resolve_named_custom_runtime.
+    if provider == "yice":
+        model_cfg["provider"] = "custom:yice"
+        model_cfg["default"] = _normalize_model_for_provider(provider, model)
+        if base_url:
+            model_cfg["base_url"] = base_url
+        cfg["model"] = model_cfg
 
-    if provider_meta.get("requires_base_url"):
-        model_cfg["base_url"] = base_url
-    elif provider_meta.get("default_base_url"):
-        model_cfg["base_url"] = provider_meta["default_base_url"]
+        # Ensure custom_providers has a yice entry
+        custom_providers = cfg.get("custom_providers", [])
+        if not isinstance(custom_providers, list):
+            custom_providers = []
+        # Update or insert
+        found = False
+        for cp in custom_providers:
+            if isinstance(cp, dict) and str(cp.get("name", "")).strip().lower() == "yice":
+                cp["base_url"] = base_url
+                cp["key_env"] = provider_meta["env_var"]
+                found = True
+                break
+        if not found:
+            custom_providers.append({
+                "name": "yice",
+                "base_url": base_url,
+                "key_env": provider_meta["env_var"],
+            })
+        cfg["custom_providers"] = custom_providers
     else:
-        model_cfg.pop("base_url", None)
+        model_cfg["provider"] = provider
+        model_cfg["default"] = _normalize_model_for_provider(provider, model)
 
-    cfg["model"] = model_cfg
+        if provider_meta.get("requires_base_url"):
+            model_cfg["base_url"] = base_url
+        elif provider_meta.get("default_base_url"):
+            model_cfg["base_url"] = provider_meta["default_base_url"]
+        else:
+            model_cfg.pop("base_url", None)
+
+        cfg["model"] = model_cfg
     _save_yaml_config(config_path, cfg)
 
     if api_key:

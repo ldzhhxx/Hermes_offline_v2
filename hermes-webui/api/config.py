@@ -584,7 +584,7 @@ CLI_TOOLSETS = _resolve_cli_toolsets()
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 # Also used as the OpenRouter model list — keep this curated to current, widely-used models.
 _FALLBACK_MODELS = [
-    # yice 内网网关 — 离线部署唯一可用模型
+    # yice 内网网关 — 离线部署默认 fallback 模型
     {"provider": "yice", "id": "Qwen3.5-397B-A17B", "label": "Qwen3.5-397B-A17B"},
 ]
 
@@ -837,7 +837,7 @@ def _named_custom_provider_slug_for_base_url(
 
 
 # Well-known models per provider (used to populate dropdown for direct API providers)
-# yice 离线部署：只保留唯一内网网关及其模型
+# yice 离线部署：静态 fallback（动态刷新优先从 endpoint 获取）
 _PROVIDER_MODELS = {
     "yice": [
         {"id": "Qwen3.5-397B-A17B", "label": "Qwen3.5-397B-A17B"},
@@ -2159,15 +2159,23 @@ def _read_visible_codex_cache_model_ids() -> list[str]:
 
 
 def _offline_filter_models(result: dict) -> dict:
-    """离线版硬收敛：确保返回给前端的 models 只含 yice / Qwen3.5-397B-A17B。"""
-    _ONLY_PROVIDER = "yice"
-    _ONLY_MODEL = "Qwen3.5-397B-A17B"
-    filtered = [g for g in (result.get("groups") or []) if (g.get("provider_id") or "").lower() == _ONLY_PROVIDER]
+    """离线版硬收敛：确保返回给前端的 models 只含 yice provider 的模型。
+
+    不再锁定单一模型，允许从 endpoint 动态刷新模型列表。
+    """
+    _ALLOWED_PROVIDERS = {"yice", "custom:yice"}
+    _DEFAULT_MODEL = "Qwen3.5-397B-A17B"
+    filtered = [g for g in (result.get("groups") or []) if (g.get("provider_id") or "").lower() in _ALLOWED_PROVIDERS]
+    # Normalize provider_id to yice for display
+    for g in filtered:
+        if (g.get("provider_id") or "").lower() == "custom:yice":
+            g["provider_id"] = "yice"
+            g["provider"] = "yice"
     if not filtered:
-        filtered = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _ONLY_MODEL, "label": _ONLY_MODEL}]}]
+        filtered = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _DEFAULT_MODEL, "label": _DEFAULT_MODEL}]}]
     return {
-        "active_provider": _ONLY_PROVIDER,
-        "default_model": _ONLY_MODEL,
+        "active_provider": "yice",
+        "default_model": result.get("default_model") or _DEFAULT_MODEL,
         "configured_model_badges": result.get("configured_model_badges", {}),
         "groups": filtered,
     }

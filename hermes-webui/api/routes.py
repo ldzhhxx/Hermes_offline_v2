@@ -5851,7 +5851,7 @@ def _handle_live_models(handler, parsed):
             # Fall back to the custom_providers entries from config.yaml so
             # the live-model enrichment step can add any models that weren't
             # already in the static list (issue #1619).
-            if provider == "custom" or provider.startswith("custom:"):
+            if provider == "custom" or provider.startswith("custom:") or provider == "yice":
                 try:
                     _cp_entries = cfg.get("custom_providers", [])
                     if isinstance(_cp_entries, list):
@@ -5864,9 +5864,29 @@ def _handle_live_models(handler, parsed):
                     pass
             
             # If still no ids, try fetching from base_url directly (OpenAI-compat endpoint)
-            if not ids and (provider == "custom" or provider.startswith("custom:")):
-                _base_url = cfg.get("model", {}).get("base_url")
-                _api_key = cfg.get("model", {}).get("api_key")
+            if not ids and (provider == "custom" or provider.startswith("custom:") or provider == "yice"):
+                # For yice, resolve base_url from custom_providers entry
+                _base_url = None
+                _api_key = None
+                if provider == "yice":
+                    _cp_entries = cfg.get("custom_providers", [])
+                    if isinstance(_cp_entries, list):
+                        for _cp in _cp_entries:
+                            if isinstance(_cp, dict) and str(_cp.get("name", "")).strip().lower() == "yice":
+                                _base_url = str(_cp.get("base_url", "") or "").strip()
+                                _key_env = str(_cp.get("key_env", "") or "").strip()
+                                if _key_env:
+                                    _api_key = os.getenv(_key_env, "").strip()
+                                if not _api_key:
+                                    _api_key = str(_cp.get("api_key", "") or "").strip()
+                                break
+                    if not _base_url:
+                        _base_url = cfg.get("model", {}).get("base_url")
+                    if not _api_key:
+                        _api_key = os.getenv("YICE_API_KEY", "").strip()
+                else:
+                    _base_url = cfg.get("model", {}).get("base_url")
+                    _api_key = cfg.get("model", {}).get("api_key")
                 if _base_url and _api_key:
                     try:
                         import urllib.request

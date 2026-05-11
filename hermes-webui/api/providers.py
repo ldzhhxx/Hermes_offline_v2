@@ -932,9 +932,34 @@ def get_providers() -> dict[str, Any]:
         active_provider = model_cfg.get("provider")
 
     # 离线版硬收敛：只向前端暴露 yice provider
-    _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice"})
+    # custom:yice 是运行时实际使用的 provider id，映射回 yice 展示
+    _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice", "custom:yice"})
     providers = [p for p in providers if p["id"] in _OFFLINE_VISIBLE_PROVIDERS]
-    if active_provider not in _OFFLINE_VISIBLE_PROVIDERS:
+    # Merge custom:yice into yice display entry
+    yice_entry = None
+    custom_yice_entry = None
+    for p in providers:
+        if p["id"] == "yice":
+            yice_entry = p
+        elif p["id"] == "custom:yice":
+            custom_yice_entry = p
+    if custom_yice_entry and yice_entry:
+        # Prefer custom:yice's has_key status (it reads from custom_providers config)
+        if custom_yice_entry.get("has_key"):
+            yice_entry["has_key"] = True
+            yice_entry["key_source"] = custom_yice_entry.get("key_source", "config_yaml")
+        if custom_yice_entry.get("models"):
+            yice_entry["models"] = custom_yice_entry["models"]
+        providers = [p for p in providers if p["id"] != "custom:yice"]
+    elif custom_yice_entry and not yice_entry:
+        # Only custom:yice exists — rename it to yice for display
+        custom_yice_entry["id"] = "yice"
+        custom_yice_entry["display_name"] = "yice"
+        providers = [custom_yice_entry]
+
+    if active_provider not in {"yice", "custom:yice"}:
+        active_provider = "yice"
+    else:
         active_provider = "yice"
 
     return {
@@ -987,6 +1012,47 @@ def set_provider_key(provider_id: str, api_key: str | None) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("Failed to write env file for provider %s", provider_id)
         return {"ok": False, "error": f"Failed to save API key: {exc}"}
+
+    # For yice: also ensure custom_providers entry exists in config.yaml
+    # so the runtime can resolve the key via key_env.
+    if provider_id == "yice" and api_key:
+        try:
+            cfg = get_config()
+            custom_providers = cfg.get("custom_providers", [])
+            if not isinstance(custom_providers, list):
+                custom_providers = []
+            found = False
+            for cp in custom_providers:
+                if isinstance(cp, dict) and str(cp.get("name", "")).strip().lower() == "yice":
+                    cp["key_env"] = env_var
+                    found = True
+                    break
+            if not found:
+                # Get base_url from model config or use default
+                base_url = ""
+                model_cfg = cfg.get("model", {})
+                if isinstance(model_cfg, dict):
+                    base_url = str(model_cfg.get("base_url") or "").strip()
+                if not base_url:
+                    base_url = "https://yice.byd.com/ai-gate/v1"
+                custom_providers.append({
+                    "name": "yice",
+                    "base_url": base_url,
+                    "key_env": env_var,
+                })
+            cfg["custom_providers"] = custom_providers
+            # Also ensure model.provider is set to custom:yice
+            model_cfg = cfg.get("model", {})
+            if not isinstance(model_cfg, dict):
+                model_cfg = {}
+            if str(model_cfg.get("provider", "")).strip().lower() in {"yice", ""}:
+                model_cfg["provider"] = "custom:yice"
+                cfg["model"] = model_cfg
+            from api.config import _get_config_path
+            config_path = Path(_get_config_path())
+            _save_yaml_config_file(config_path, cfg)
+        except Exception:
+            logger.debug("Failed to update custom_providers for yice", exc_info=True)
 
     # Invalidate the model cache so the dropdown refreshes on next request.
     # Using invalidate_models_cache() instead of reload_config() to avoid
