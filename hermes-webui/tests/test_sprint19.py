@@ -58,8 +58,8 @@ def test_login_page_served():
     with urllib.request.urlopen(req, timeout=10) as r:
         html = r.read().decode()
         assert r.status == 200
-        assert "Sign in" in html
-        assert "Hermes" in html
+        assert "登录" in html
+        assert "DiAgent" in html
         assert 'src="static/login.js?v=' in html
         assert 'src="/static/login.js"' not in html
 

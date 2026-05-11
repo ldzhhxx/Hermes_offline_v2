@@ -4477,7 +4477,7 @@ async function loadSettingsPanel(){
     // closing the panel via toolbar X does not clear the user's preference.
     const wsPanelCb=$('settingsWorkspacePanelOpen');
     if(wsPanelCb){
-      wsPanelCb.checked=localStorage.getItem('hermes-webui-workspace-panel-pref')==='open';
+      wsPanelCb.checked=localStorage.getItem('hermes-webui-workspace-panel-pref')!=='closed';
       wsPanelCb.onchange=function(){
         const open=this.checked;
         localStorage.setItem('hermes-webui-workspace-panel-pref',open?'open':'closed');

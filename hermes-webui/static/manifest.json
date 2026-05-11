@@ -1,7 +1,7 @@
 {
-  "name": "Hermes",
-  "short_name": "Hermes",
-  "description": "Hermes AI Agent Web UI",
+  "name": "DiAgent",
+  "short_name": "DiAgent",
+  "description": "DiAgent AI Assistant",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0D0D1A",

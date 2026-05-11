@@ -933,6 +933,10 @@ def get_providers() -> dict[str, Any]:
 
     # 离线版硬收敛：只向前端暴露 yice provider
     # custom:yice 是运行时实际使用的 provider id，映射回 yice 展示
+    # ── MODEL VISIBILITY CONTROL POINT 3/3 ──
+    # To expose additional providers, add their ids to this frozenset.
+    # See also: api/config.py _offline_filter_models() (1/3) and
+    #           api/config.py _build_available_models_uncached() (2/3).
     _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice", "custom:yice"})
     providers = [p for p in providers if p["id"] in _OFFLINE_VISIBLE_PROVIDERS]
     # Merge custom:yice into yice display entry

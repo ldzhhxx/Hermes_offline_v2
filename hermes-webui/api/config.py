@@ -2162,6 +2162,12 @@ def _offline_filter_models(result: dict) -> dict:
     """离线版硬收敛：确保返回给前端的 models 只含 yice provider 的模型。
 
     不再锁定单一模型，允许从 endpoint 动态刷新模型列表。
+
+    ── MODEL VISIBILITY CONTROL POINT 1/3 ──
+    To change which providers/models are visible to end users, modify
+    _ALLOWED_PROVIDERS below. Also update:
+      - _build_available_models_uncached() filter near line ~3256 in this file (point 2/3)
+      - get_providers() in api/providers.py _OFFLINE_VISIBLE_PROVIDERS (point 3/3)
     """
     _ALLOWED_PROVIDERS = {"yice", "custom:yice"}
     _DEFAULT_MODEL = "Qwen3.5-397B-A17B"
@@ -3254,6 +3260,8 @@ def get_available_models() -> dict:
         ]
 
         # 离线版硬收敛：只向前端暴露 yice provider 及其唯一模型
+        # ── MODEL VISIBILITY CONTROL POINT 2/3 ──
+        # Change _OFFLINE_ONLY_PROVIDER / _OFFLINE_ONLY_MODEL to expose different models.
         _OFFLINE_ONLY_PROVIDER = "yice"
         _OFFLINE_ONLY_MODEL = "Qwen3.5-397B-A17B"
         groups = [g for g in groups if (g.get("provider_id") or "").lower() == _OFFLINE_ONLY_PROVIDER]
@@ -3490,7 +3498,7 @@ _SETTINGS_DEFAULTS = {
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
     "language": "zh",  # UI locale code; must match a key in static/i18n.js LOCALES
     "bot_name": os.getenv(
-        "HERMES_WEBUI_BOT_NAME", "Hermes"
+        "HERMES_WEBUI_BOT_NAME", "DiAgent"
     ),  # display name for the assistant
     "sound_enabled": False,  # play notification sound when assistant finishes
     "notifications_enabled": False,  # browser notification when tab is in background

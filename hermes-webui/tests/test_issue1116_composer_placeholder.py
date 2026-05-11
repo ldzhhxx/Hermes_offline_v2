@@ -34,8 +34,8 @@ class TestComposerPlaceholderProfile:
         m = re.search(r'function applyBotName\(\)\{.*?\n\}', src, re.DOTALL)
         assert m, "applyBotName function must exist"
         body = m.group(0)
-        assert "window._botName||'Hermes'" in body, \
-            "applyBotName must fall back to window._botName or 'Hermes'"
+        assert "window._botName||'DiAgent'" in body, \
+            "applyBotName must fall back to window._botName or 'DiAgent'"
 
     def test_switchToProfile_calls_applyBotName(self):
         """switchToProfile() must call applyBotName() after switching."""

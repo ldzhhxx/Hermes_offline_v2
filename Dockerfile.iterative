@@ -1,0 +1,72 @@
+# Dockerfile.iterative — Rebuild app layers on top of a pre-built base image.
+#
+# Usage:
+#   # First, build the full image once (with internet):
+#   docker build -t hermes-offline:base .
+#
+#   # Later, rebuild with code changes (offline / intranet):
+#   docker build -f Dockerfile.iterative \
+#     --build-arg BASE_IMAGE=hermes-offline:base \
+#     --build-arg PIP_INDEX_URL="http://your-intranet-pip/simple" \
+#     --build-arg PIP_TRUSTED_HOST="your-intranet-pip-host" \
+#     --build-arg NPM_REGISTRY="http://your-intranet-npm" \
+#     -t hermes-offline:latest .
+#
+# This Dockerfile assumes:
+#   - The base image already has the venv, node_modules, system packages.
+#   - Only source code (hermes-agent, hermes-webui, scripts) is refreshed.
+#   - If dependencies changed (pyproject.toml, requirements.txt, package.json),
+#     use the full Dockerfile instead or pass REINSTALL_DEPS=1.
+
+ARG BASE_IMAGE=hermes-offline:base
+FROM ${BASE_IMAGE}
+
+ARG APT_MIRROR=""
+ARG PIP_INDEX_URL=""
+ARG PIP_EXTRA_INDEX_URL=""
+ARG PIP_TRUSTED_HOST=""
+ARG NPM_REGISTRY=""
+ARG REINSTALL_DEPS=""
+
+WORKDIR /opt/hermes-offline
+
+# Configure intranet mirrors (only if provided)
+RUN set -eux; \
+    if [ -n "$APT_MIRROR" ]; then \
+      echo "Using custom APT mirror: $APT_MIRROR"; \
+      if [ -f /etc/apt/sources.list ]; then \
+        sed -i -E "s|https?://[^ ]+/(debian|ubuntu)|${APT_MIRROR}|g" /etc/apt/sources.list; \
+      fi; \
+      if [ -d /etc/apt/sources.list.d ]; then \
+        find /etc/apt/sources.list.d -type f \( -name '*.list' -o -name '*.sources' \) -print0 \
+          | xargs -0 -r sed -i -E "s|https?://[^ ]+/(debian|ubuntu)|${APT_MIRROR}|g"; \
+      fi; \
+    fi; \
+    if [ -n "$PIP_INDEX_URL" ]; then \
+      /opt/hermes-offline/.venv/bin/python -m pip config --global set global.index-url "$PIP_INDEX_URL"; \
+    fi; \
+    if [ -n "$PIP_EXTRA_INDEX_URL" ]; then \
+      /opt/hermes-offline/.venv/bin/python -m pip config --global set global.extra-index-url "$PIP_EXTRA_INDEX_URL"; \
+    fi; \
+    if [ -n "$PIP_TRUSTED_HOST" ]; then \
+      /opt/hermes-offline/.venv/bin/python -m pip config --global set global.trusted-host "$PIP_TRUSTED_HOST"; \
+    fi; \
+    if [ -n "$NPM_REGISTRY" ]; then \
+      npm config set registry "$NPM_REGISTRY"; \
+    fi
+
+# Copy updated source code
+COPY hermes-agent ./hermes-agent
+COPY hermes-webui ./hermes-webui
+COPY scripts ./scripts
+
+# Reinstall deps only if REINSTALL_DEPS is set (e.g. after pyproject.toml change)
+RUN set -eux; \
+    if [ -n "$REINSTALL_DEPS" ]; then \
+      /opt/hermes-offline/.venv/bin/pip install -e './hermes-agent[messaging,cli,pty]' \
+      && /opt/hermes-offline/.venv/bin/pip install -r ./hermes-webui/requirements.txt \
+      && if [ -f ./hermes-agent/package-lock.json ]; then (cd ./hermes-agent && npm ci --omit=dev --ignore-scripts); else (cd ./hermes-agent && npm install --omit=dev --ignore-scripts); fi; \
+    fi
+
+RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/start-dev.sh \
+    && chown -R hermes:hermes /opt/hermes-offline

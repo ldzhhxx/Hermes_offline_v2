@@ -303,6 +303,37 @@ docker logs -f hermes-offline-dev
 
 ---
 
+## 🔄 迭代重建（Dockerfile.iterative）
+
+当你已经在有网环境构建过一次完整镜像后，后续只修改了前端/后端代码，可以使用 `Dockerfile.iterative` 在内网快速重建，无需重新安装所有依赖：
+
+```bash
+# 假设完整镜像已构建为 hermes-offline:base
+docker build -f Dockerfile.iterative \
+  --build-arg BASE_IMAGE=hermes-offline:base \
+  --build-arg APT_MIRROR="http://内网apt源/debian" \
+  --build-arg PIP_INDEX_URL="http://内网pip源/simple" \
+  --build-arg PIP_TRUSTED_HOST="内网pip域名" \
+  --build-arg NPM_REGISTRY="http://内网npm源" \
+  -t hermes-offline:latest .
+```
+
+若依赖文件（`pyproject.toml`、`requirements.txt`、`package.json`）也有变更，追加 `--build-arg REINSTALL_DEPS=1`。
+
+---
+
+## 🔒 模型可见性控制
+
+离线版默认只向前端暴露 `yice` provider。如需修改可见的 provider/模型列表，需同步修改以下三处（代码中已标注 `MODEL VISIBILITY CONTROL POINT`）：
+
+| 序号 | 文件 | 位置 |
+|------|------|------|
+| 1/3 | `hermes-webui/api/config.py` | `_offline_filter_models()` 函数 |
+| 2/3 | `hermes-webui/api/config.py` | `_build_available_models_uncached()` 末尾 |
+| 3/3 | `hermes-webui/api/providers.py` | `get_providers()` 末尾 `_OFFLINE_VISIBLE_PROVIDERS` |
+
+---
+
 <div align="center">
 
 **Hermes Offline v2 · 把 Agent 能力搬进内网**
