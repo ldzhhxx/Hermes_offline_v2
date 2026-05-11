@@ -128,16 +128,31 @@ def _env_enabled(name: str) -> bool:
 
 
 def _get_disabled_plugins() -> set:
-    """Read the disabled plugins list from config.yaml.
+    """Read the hard disabled plugins list from config.yaml.
 
-    Kept for backward compat and explicit deny-list semantics. A plugin
-    name in this set will never load, even if it appears in
+    A plugin in this set will never load, even if it appears in
     ``plugins.enabled``.
     """
     try:
         from hermes_cli.config import load_config
         config = load_config()
         disabled = cfg_get(config, "plugins", "disabled", default=[])
+        return set(disabled) if isinstance(disabled, list) else set()
+    except Exception:
+        return set()
+
+
+def _get_default_disabled_plugins() -> set:
+    """Read the soft/default disabled plugins list from config.yaml.
+
+    These plugins stay in the repository but are disabled by default. Unlike
+    ``plugins.disabled``, an explicit opt-in via ``plugins.enabled`` may turn
+    them back on.
+    """
+    try:
+        from hermes_cli.config import load_config
+        config = load_config()
+        disabled = cfg_get(config, "plugins", "default_disabled", default=[])
         return set(disabled) if isinstance(disabled, list) else set()
     except Exception:
         return set()
@@ -684,20 +699,34 @@ class PluginManager:
         # ``disk-cleanup``) so ``tts/openai`` and ``image_gen/openai``
         # don't collide even when both manifests say ``name: openai``.
         disabled = _get_disabled_plugins()
+        default_disabled = _get_default_disabled_plugins()
         enabled = _get_enabled_plugins()  # None = opt-in default (nothing enabled)
         winners: Dict[str, PluginManifest] = {}
         for manifest in manifests:
             winners[manifest.key or manifest.name] = manifest
         for manifest in winners.values():
             lookup_key = manifest.key or manifest.name
+            explicitly_enabled = bool(
+                enabled is not None and (lookup_key in enabled or manifest.name in enabled)
+            )
 
-            # Explicit disable always wins (matches on key or on legacy
+            # Explicit hard-disable always wins (matches on key or on legacy
             # bare name for back-compat with existing user configs).
             if lookup_key in disabled or manifest.name in disabled:
                 loaded = LoadedPlugin(manifest=manifest, enabled=False)
                 loaded.error = "disabled via config"
                 self._plugins[lookup_key] = loaded
-                logger.debug("Skipping disabled plugin '%s'", lookup_key)
+                logger.debug("Skipping hard-disabled plugin '%s'", lookup_key)
+                continue
+
+            # Offline/default disable can be overridden by an explicit opt-in.
+            if not explicitly_enabled and (
+                lookup_key in default_disabled or manifest.name in default_disabled
+            ):
+                loaded = LoadedPlugin(manifest=manifest, enabled=False)
+                loaded.error = "disabled by offline default"
+                self._plugins[lookup_key] = loaded
+                logger.debug("Skipping default-disabled plugin '%s'", lookup_key)
                 continue
 
             # Exclusive plugins (memory providers) have their own

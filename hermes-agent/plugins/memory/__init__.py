@@ -34,6 +34,31 @@ logger = logging.getLogger(__name__)
 _MEMORY_PLUGINS_DIR = Path(__file__).parent
 
 
+def _is_provider_disabled(name: str) -> bool:
+    """Return True when a memory provider is hidden by config policy."""
+    try:
+        from hermes_cli.config import cfg_get, load_config
+        from hermes_cli.plugins import _get_default_disabled_plugins, _get_disabled_plugins, _get_enabled_plugins
+
+        disabled = _get_disabled_plugins()
+        if name in disabled or f"memory/{name}" in disabled:
+            return True
+
+        enabled = _get_enabled_plugins()
+        if enabled is not None and (name in enabled or f"memory/{name}" in enabled):
+            return False
+
+        config = load_config()
+        active_provider = cfg_get(config, "memory", "provider", default=None)
+        if active_provider == name:
+            return False
+
+        default_disabled = _get_default_disabled_plugins()
+        return name in default_disabled or f"memory/{name}" in default_disabled
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Directory helpers
 # ---------------------------------------------------------------------------
@@ -80,6 +105,8 @@ def _iter_provider_dirs() -> List[Tuple[str, Path]]:
                 continue
             if not (child / "__init__.py").exists():
                 continue
+            if _is_provider_disabled(child.name):
+                continue
             seen.add(child.name)
             dirs.append((child.name, child))
 
@@ -93,6 +120,8 @@ def _iter_provider_dirs() -> List[Tuple[str, Path]]:
                 continue  # bundled takes precedence
             if not _is_memory_provider_dir(child):
                 continue  # skip non-memory plugins
+            if _is_provider_disabled(child.name):
+                continue
             dirs.append((child.name, child))
 
     return dirs
@@ -103,6 +132,8 @@ def find_provider_dir(name: str) -> Optional[Path]:
 
     Checks bundled first, then user-installed.
     """
+    if _is_provider_disabled(name):
+        return None
     # Bundled
     bundled = _MEMORY_PLUGINS_DIR / name
     if bundled.is_dir() and (bundled / "__init__.py").exists():

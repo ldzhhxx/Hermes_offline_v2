@@ -168,6 +168,28 @@ class TestDoctorToolAvailabilityOverrides:
         assert doctor._doctor_tool_availability_detail("kanban") == "(runtime-gated; loaded only for dispatcher-spawned workers)"
 
 
+class TestHonchoDoctorConfigDetection:
+    def test_reports_configured_when_enabled_with_api_key(self, monkeypatch):
+        fake_config = SimpleNamespace(enabled=True, api_key="***")
+
+        monkeypatch.setattr(
+            "plugins.memory.honcho.client.HonchoClientConfig.from_global_config",
+            lambda: fake_config,
+        )
+
+        assert doctor._honcho_is_configured_for_doctor()
+
+    def test_reports_not_configured_without_api_key(self, monkeypatch):
+        fake_config = SimpleNamespace(enabled=True, api_key="")
+
+        monkeypatch.setattr(
+            "plugins.memory.honcho.client.HonchoClientConfig.from_global_config",
+            lambda: fake_config,
+        )
+
+        assert not doctor._honcho_is_configured_for_doctor()
+
+
 def test_run_doctor_sets_interactive_env_for_tool_checks(monkeypatch, tmp_path):
     """Doctor should present CLI-gated tools as available in CLI context."""
     project_root = tmp_path / "project"

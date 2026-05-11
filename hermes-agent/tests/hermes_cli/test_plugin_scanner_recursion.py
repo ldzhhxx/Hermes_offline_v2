@@ -268,6 +268,27 @@ class TestBackendGate:
         assert "exclusive" in (loaded.error or "")
 
 
+# ── Bundled backend auto-load (integration with real bundled plugin) ────────
+
+
+class TestBundledBackendAutoLoad:
+    def test_bundled_image_gen_openai_is_default_disabled_on_offline_branch(self, tmp_path, monkeypatch):
+        """The bundled ``plugins/image_gen/openai/`` plugin remains discoverable
+        in-repo, but the curated offline branch keeps it disabled by default."""
+        import os
+        hermes_home = Path(os.environ["HERMES_HOME"])  # set by hermetic conftest fixture
+
+        mgr = PluginManager()
+        mgr.discover_and_load()
+
+        assert "image_gen/openai" in mgr._plugins
+        loaded = mgr._plugins["image_gen/openai"]
+        assert loaded.manifest.source == "bundled"
+        assert loaded.manifest.kind == "backend"
+        assert loaded.enabled is False
+        assert loaded.error == "disabled by offline default"
+
+
 # ── PluginContext.register_image_gen_provider ───────────────────────────────
 
 

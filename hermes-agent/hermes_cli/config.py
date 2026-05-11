@@ -1381,6 +1381,35 @@ DEFAULT_CONFIG = {
         "backup_keep": 5,
     },
 
+    # Bundled plugin policy for the offline branch.
+    #
+    # Keep plugin source files in-tree so functionality can be restored or
+    # audited later, but default-disable integrations that are misleading in a
+    # LAN/offline deployment because they depend on public SaaS, third-party
+    # accounts, or external hosted APIs.
+    #
+    # Use ``default_disabled`` instead of ``disabled`` so an operator can still
+    # opt back in explicitly via config when they really do want one of these
+    # integrations.
+    "plugins": {
+        "default_disabled": [
+            "google_meet",
+            "image_gen/openai",
+            "image_gen/openai-codex",
+            "image_gen/xai",
+            "memory/byterover",
+            "memory/honcho",
+            "memory/mem0",
+            "memory/retaindb",
+            "memory/supermemory",
+            "observability/langfuse",
+            "platforms/google_chat",
+            "platforms/teams",
+            "spotify",
+            "teams_pipeline",
+        ],
+    },
+
     # Config schema version - bump this when adding new required fields
     "_config_version": 23,
 }
@@ -2911,7 +2940,7 @@ _KNOWN_ROOT_KEYS = {
     "fallback_providers", "credential_pool_strategies", "toolsets",
     "agent", "terminal", "display", "compression", "delegation",
     "auxiliary", "custom_providers", "context", "memory", "gateway",
-    "sessions",
+    "plugins", "sessions",
 }
 
 # Valid fields inside a custom_providers list entry
