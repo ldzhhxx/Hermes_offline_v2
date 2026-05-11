@@ -13,3 +13,5 @@ workspace/
 **/.env.*
 !**/.env.example
 !**/.env.docker.example
+!image-config/.env
+!image-config/.env.example

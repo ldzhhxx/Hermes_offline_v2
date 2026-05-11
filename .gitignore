@@ -8,3 +8,5 @@ __pycache__/
 .venv/
 venv/
 node_modules/
+image-config/.env
+!image-config/.env.example

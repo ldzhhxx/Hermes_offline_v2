@@ -76,6 +76,11 @@ RUN useradd --create-home --home-dir /home/hermes --shell /bin/bash hermes \
     && mkdir -p /home/hermes/.hermes /home/hermes/workspace \
     && chown -R hermes:hermes /home/hermes /opt/hermes-offline
 
+COPY image-config/config.yaml /home/hermes/.hermes/config.yaml
+COPY image-config/.env /home/hermes/.hermes/.env
+
+RUN chown hermes:hermes /home/hermes/.hermes/config.yaml /home/hermes/.hermes/.env
+
 # Start as root so the entrypoint can fix ownership of bind-mounted
 # ./data and ./workspace directories created by Docker on the host.
 # The entrypoint then launches Hermes Agent and WebUI as the unprivileged

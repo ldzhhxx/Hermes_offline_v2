@@ -1,0 +1,37 @@
+# 镜像内 Hermes 主配置文件
+# 构建时会被复制到: /home/hermes/.hermes/config.yaml
+# 这个文件放“结构化配置”，比如默认 provider / model / base_url / 插件默认策略。
+# 密钥建议放到 image-config/.env 里，不要直接写在这里。
+
+model:
+  # 当前离线分支固定走 yice 这条 custom provider 链路
+  provider: custom:yice
+  # 默认模型，可按需改成你们内网实际想开放的模型名
+  default: Qwen3.5-397B-A17B
+  # yice 的 OpenAI-compatible base_url
+  base_url: https://yice.byd.com/ai-gate/v1
+
+custom_providers:
+  - name: yice
+    base_url: https://yice.byd.com/ai-gate/v1
+    # 不在这里写死 key，改由 /home/hermes/.hermes/.env 里的 YICE_API_KEY 提供
+    key_env: YICE_API_KEY
+
+plugins:
+  # 离线分支默认不暴露这些明显依赖公网 / SaaS / 第三方账号的插件。
+  # 如需重新启用，可把名字移出 default_disabled，或改为 plugins.enabled 显式启用。
+  default_disabled:
+    - google_meet
+    - spotify
+    - teams_pipeline
+    - platforms/google_chat
+    - platforms/teams
+    - image_gen/openai
+    - image_gen/openai-codex
+    - image_gen/xai
+    - memory/byterover
+    - memory/honcho
+    - memory/mem0
+    - memory/retaindb
+    - memory/supermemory
+    - observability/langfuse
