@@ -104,26 +104,11 @@ _PROVIDER_ENV_VAR: dict[str, str] = {
     "x-ai": "XAI_API_KEY",
     "opencode-zen": "OPENCODE_ZEN_API_KEY",
     "opencode-go": "OPENCODE_GO_API_KEY",
-    # NOTE: bare "ollama" (local) deliberately omitted — local Ollama is keyless
-    # by default and the runtime in hermes_cli/runtime_provider.py only consumes
-    # OLLAMA_API_KEY when the base URL hostname is ollama.com (Ollama Cloud).
-    # If we mapped both providers to the same env var, configuring Ollama Cloud
-    # would falsely flip the local Ollama card to "API key configured" (#1410).
-    # Users who genuinely run an authenticated local Ollama can still set a key
-    # via providers.ollama.api_key in config.yaml — that path remains supported
-    # by _provider_has_key().
     "ollama-cloud": "OLLAMA_API_KEY",
-    # Bare "lmstudio" maps to LM_API_KEY — the canonical env var the agent CLI
-    # runtime reads (hermes_cli/auth.py:182, api_key_env_vars=("LM_API_KEY",)).
-    # Pre-#1499/#1500 the WebUI used LMSTUDIO_API_KEY here, which made Settings
-    # report keys correctly but the agent runtime ignored them — masked in
-    # practice by the LMSTUDIO_NOAUTH_PLACEHOLDER for keyless local installs.
-    # Aligning to LM_API_KEY makes a configured LM Studio key actually work
-    # for chat. The legacy LMSTUDIO_API_KEY name is read by `_provider_has_key`
-    # via _PROVIDER_ENV_VAR_ALIASES below so existing users don't see Settings
-    # flip to "no key" after upgrading.
     "lmstudio": "LM_API_KEY",
     "nvidia": "NVIDIA_API_KEY",
+    # yice 内网网关
+    "yice": "YICE_API_KEY",
 }
 
 # Read-only legacy env-var aliases.  When `_provider_has_key(pid)` looks up its
@@ -945,6 +930,12 @@ def get_providers() -> dict[str, Any]:
     model_cfg = cfg.get("model", {})
     if isinstance(model_cfg, dict):
         active_provider = model_cfg.get("provider")
+
+    # 离线版硬收敛：只向前端暴露 yice provider
+    _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice"})
+    providers = [p for p in providers if p["id"] in _OFFLINE_VISIBLE_PROVIDERS]
+    if active_provider not in _OFFLINE_VISIBLE_PROVIDERS:
+        active_provider = "yice"
 
     return {
         "providers": providers,

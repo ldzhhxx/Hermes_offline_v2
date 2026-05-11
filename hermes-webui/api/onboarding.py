@@ -34,162 +34,26 @@ logger = logging.getLogger(__name__)
 
 
 _SUPPORTED_PROVIDER_SETUPS = {
-    # ── Easy start ──────────────────────────────────────────────────────
-    "openrouter": {
-        "label": "OpenRouter",
-        "env_var": "OPENROUTER_API_KEY",
-        "default_model": "anthropic/claude-sonnet-4.6",
-        "requires_base_url": False,
-        "models": [
-            {"id": model["id"], "label": model["label"]} for model in _FALLBACK_MODELS
-        ],
-        "category": "easy_start",
-        "quick": True,
-    },
-    "anthropic": {
-        "label": "Anthropic",
-        "env_var": "ANTHROPIC_API_KEY",
-        "default_model": "claude-sonnet-4.6",
-        "requires_base_url": False,
-        "models": list(_PROVIDER_MODELS.get("anthropic", [])),
-        "category": "easy_start",
-        "oauth_provider": "anthropic",
-        "oauth_label": "Claude Code OAuth",
-    },
-    "openai": {
-        "label": "OpenAI",
-        "env_var": "OPENAI_API_KEY",
-        "default_model": "gpt-4o",
-        "default_base_url": "https://api.openai.com/v1",
-        "requires_base_url": False,
-        "models": list(_PROVIDER_MODELS.get("openai", [])),
-        "category": "easy_start",
-    },
-    # ── Open / self-hosted ─────────────────────────────────────────────
-    "ollama": {
-        "label": "Ollama",
-        "env_var": "OLLAMA_API_KEY",
-        "default_model": "qwen3:32b",
-        "default_base_url": "http://localhost:11434/v1",
+    # yice 内网网关 — 离线部署唯一可见 provider
+    "yice": {
+        "label": "yice",
+        "env_var": "YICE_API_KEY",
+        "default_model": "Qwen3.5-397B-A17B",
+        "default_base_url": "https://yice.byd.com/ai-gate/v1",
         "requires_base_url": True,
-        # Local Ollama runs keyless by default — only Ollama Cloud requires
-        # OLLAMA_API_KEY.  The wizard accepts an empty api_key for this
-        # provider; users with auth enabled can still type one.  See #1499.
+        # 内网环境 API key 由管理员分配，onboarding 时可留空待填
         "key_optional": True,
-        "models": [],
-        "category": "self_hosted",
-    },
-    "lmstudio": {
-        "label": "LM Studio",
-        # Canonical env var matches the agent CLI runtime (hermes_cli/auth.py:182,
-        # api_key_env_vars=("LM_API_KEY",)).  Onboarding writes this name so the
-        # agent runtime actually picks up the key on the next chat — pre-#1499/#1500
-        # the WebUI wrote LMSTUDIO_API_KEY which the agent runtime ignored, masked
-        # in practice by the LMSTUDIO_NOAUTH_PLACEHOLDER fallback for keyless installs.
-        "env_var": "LM_API_KEY",
-        # Legacy env var written by older WebUI builds (≤ v0.50.272).  Detection
-        # paths (_provider_api_key_present here, _provider_has_key in providers.py)
-        # also read this name so existing users with the old key in their .env
-        # don't flip to "no key" in Settings → Providers after upgrading.
-        # Onboarding only writes the canonical name going forward.
-        "env_var_aliases": ["LMSTUDIO_API_KEY"],
-        "default_model": "gpt-4o-mini",
-        "default_base_url": "http://localhost:1234/v1",
-        "requires_base_url": True,
-        # Most LM Studio installs run keyless (LMSTUDIO_NOAUTH_PLACEHOLDER on the
-        # agent side handles this).  The wizard accepts an empty api_key; auth-
-        # enabled servers still need one but the user types it in the same field.
-        # See #1499 (third sub-bug from #1420).
-        "key_optional": True,
-        "models": [],
-        "category": "self_hosted",
-    },
-    "custom": {
-        "label": "Custom OpenAI-compatible",
-        "env_var": "OPENAI_API_KEY",
-        "default_model": "gpt-4o-mini",
-        "requires_base_url": True,
-        # Many self-hosted OpenAI-compatible servers (vLLM, llama-server,
-        # TabbyAPI, etc.) run keyless behind a private network.  The wizard
-        # accepts an empty api_key — auth-protected endpoints can still
-        # supply one.  See #1499.
-        "key_optional": True,
-        "models": [],
-        "category": "self_hosted",
-    },
-    # ── Specialized / extended ──────────────────────────────────────────
-    "gemini": {
-        "label": "Google Gemini",
-        "env_var": "GOOGLE_API_KEY",
-        "default_model": "gemini-3.1-pro-preview",
-        "default_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "requires_base_url": False,
-        # _PROVIDER_MODELS in api/config.py is keyed under "google" even though
-        # the agent's alias map normalizes "google" → "gemini".  Use the catalog
-        # key here so the wizard surfaces the actual model list.
-        "models": list(_PROVIDER_MODELS.get("google", [])),
-        "category": "specialized",
-    },
-    "deepseek": {
-        "label": "DeepSeek",
-        "env_var": "DEEPSEEK_API_KEY",
-        "default_model": "deepseek-v4-flash",
-        "default_base_url": "https://api.deepseek.com",
-        "requires_base_url": False,
-        "models": list(_PROVIDER_MODELS.get("deepseek", [])),
-        "category": "specialized",
-    },
-    "zai": {
-        "label": "Z.AI / GLM (智谱)",
-        "env_var": "GLM_API_KEY",
-        "default_model": "glm-5.1",
-        "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "requires_base_url": False,
-        "models": list(_PROVIDER_MODELS.get("zai", [])),
-        "category": "specialized",
-    },
-    "nvidia": {
-        "label": "NVIDIA NIM",
-        "env_var": "NVIDIA_API_KEY",
-        "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        "default_base_url": "https://integrate.api.nvidia.com/v1",
-        "requires_base_url": False,
-        "models": list(_PROVIDER_MODELS.get("nvidia", [])),
-        "category": "specialized",
-    },
-    "mistralai": {
-        "label": "Mistral",
-        "env_var": "MISTRAL_API_KEY",
-        "default_model": "mistral-large-latest",
-        "default_base_url": "https://api.mistral.ai/v1",
-        "requires_base_url": False,
-        # No catalog entry for mistralai today — wizard shows a free-text input.
-        "models": list(_PROVIDER_MODELS.get("mistralai", [])),
-        "category": "specialized",
-    },
-    "x-ai": {
-        "label": "xAI (Grok)",
-        "env_var": "XAI_API_KEY",
-        "default_model": "grok-4.20",
-        "default_base_url": "https://api.x.ai/v1",
-        "requires_base_url": False,
-        # Agent normalizes "x-ai" → "xai"; _PROVIDER_MODELS is also keyed "xai"
-        # when populated, so check both keys for forward-compatibility.
-        "models": list(_PROVIDER_MODELS.get("xai", []) or _PROVIDER_MODELS.get("x-ai", [])),
-        "category": "specialized",
+        "models": [{"id": "Qwen3.5-397B-A17B", "label": "Qwen3.5-397B-A17B"}],
+        "category": "intranet",
     },
 }
 
 _PROVIDER_CATEGORIES = [
-    {"id": "easy_start", "label": "Easy start", "order": 0},
-    {"id": "self_hosted", "label": "Open / self-hosted", "order": 1},
-    {"id": "specialized", "label": "Specialized", "order": 2},
+    {"id": "intranet", "label": "内网网关", "order": 0},
 ]
 
 _UNSUPPORTED_PROVIDER_NOTE = (
-    "Advanced provider flows such as Nous Portal and GitHub Copilot are still "
-    "terminal-first. OpenAI Codex and Anthropic Claude Code can be authenticated in this onboarding flow "
-    "when your Hermes config selects the corresponding provider."
+    "当前为离线内网部署，仅支持 yice 内网网关。"
 )
 
 

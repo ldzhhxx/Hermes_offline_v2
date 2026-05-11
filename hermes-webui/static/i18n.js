@@ -8908,7 +8908,8 @@ function resolveLocale(lang) {
  * @returns {string}
  */
 function resolvePreferredLocale(primary, fallback) {
-  return resolveLocale(primary) || resolveLocale(fallback) || 'en';
+  // Default to Simplified Chinese for offline intranet deployment.
+  return resolveLocale(primary) || resolveLocale(fallback) || 'zh';
 }
 
 /**

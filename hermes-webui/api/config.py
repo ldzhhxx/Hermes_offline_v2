@@ -584,79 +584,16 @@ CLI_TOOLSETS = _resolve_cli_toolsets()
 # Hardcoded fallback models (used when no config.yaml or agent is available)
 # Also used as the OpenRouter model list — keep this curated to current, widely-used models.
 _FALLBACK_MODELS = [
-    # OpenAI
-    {"provider": "OpenAI",    "id": "openai/gpt-5.4-mini",                "label": "GPT-5.4 Mini"},
-    {"provider": "OpenAI",    "id": "openai/gpt-5.4",                     "label": "GPT-5.4"},
-    # Anthropic — 4.6 flagship + 4.5 generation
-    {"provider": "Anthropic", "id": "anthropic/claude-opus-4.7",          "label": "Claude Opus 4.7"},
-    {"provider": "Anthropic", "id": "anthropic/claude-opus-4.6",          "label": "Claude Opus 4.6"},
-    {"provider": "Anthropic", "id": "anthropic/claude-sonnet-4.6",        "label": "Claude Sonnet 4.6"},
-    {"provider": "Anthropic", "id": "anthropic/claude-sonnet-4-5",        "label": "Claude Sonnet 4.5"},
-    {"provider": "Anthropic", "id": "anthropic/claude-haiku-4-5",         "label": "Claude Haiku 4.5"},
-    # Google — 3.x (latest preview) + 2.5 (stable GA)
-    {"provider": "Google",    "id": "google/gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-    {"provider": "Google",    "id": "google/gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-    {"provider": "Google",    "id": "google/gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-    {"provider": "Google",    "id": "google/gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-    {"provider": "Google",    "id": "google/gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
-    # DeepSeek
-    {"provider": "DeepSeek",  "id": "deepseek/deepseek-v4-flash",          "label": "DeepSeek V4 Flash"},
-    {"provider": "DeepSeek",  "id": "deepseek/deepseek-v4-pro",            "label": "DeepSeek V4 Pro"},
-    {"provider": "DeepSeek",  "id": "deepseek/deepseek-chat-v3-0324",      "label": "DeepSeek V3 (legacy)"},
-    {"provider": "DeepSeek",  "id": "deepseek/deepseek-r1",                "label": "DeepSeek R1 (legacy)"},
-    # Qwen (Alibaba) — strong coding and general models
-    {"provider": "Qwen",      "id": "qwen/qwen3-coder",                   "label": "Qwen3 Coder"},
-    {"provider": "Qwen",      "id": "qwen/qwen3.6-plus",                  "label": "Qwen3.6 Plus"},
-    # xAI
-    {"provider": "xAI",       "id": "x-ai/grok-4.20",                    "label": "Grok 4.20"},
-    # Mistral
-    {"provider": "Mistral",   "id": "mistralai/mistral-large-latest",     "label": "Mistral Large"},
-    # MiniMax
-    {"provider": "MiniMax",   "id": "minimax/MiniMax-M2.7",             "label": "MiniMax M2.7"},
-    {"provider": "MiniMax",   "id": "minimax/MiniMax-M2.7-highspeed",   "label": "MiniMax M2.7 Highspeed"},
-    # Z.AI / GLM
-    {"provider": "Z.AI",      "id": "zai/glm-5.1",                      "label": "GLM-5.1"},
-    {"provider": "Z.AI",      "id": "zai/glm-5",                        "label": "GLM-5"},
-    {"provider": "Z.AI",      "id": "zai/glm-5-turbo",                  "label": "GLM-5 Turbo"},
-    {"provider": "Z.AI",      "id": "zai/glm-4.7",                      "label": "GLM-4.7"},
-    {"provider": "Z.AI",      "id": "zai/glm-4.5",                      "label": "GLM-4.5"},
-    {"provider": "Z.AI",      "id": "zai/glm-4.5-flash",                "label": "GLM-4.5 Flash"},
-    # OpenRouter free-tier models — must appear in fallback list so they
-    # are visible even when the tool-support filter in hermes_cli strips
-    # them out of the live catalog (see #1426).
-    {"provider": "OpenRouter", "id": "openrouter/elephant-alpha",                   "label": "Elephant Alpha (free)"},
-    {"provider": "OpenRouter", "id": "openrouter/owl-alpha",                        "label": "Owl Alpha (free)"},
-    {"provider": "OpenRouter", "id": "tencent/hy3-preview:free",                    "label": "Hy3 Preview (free)"},
-    {"provider": "OpenRouter", "id": "nvidia/nemotron-3-super-120b-a12b:free",      "label": "Nemotron 3 Super (free)"},
-    {"provider": "OpenRouter", "id": "arcee-ai/trinity-large-preview:free",         "label": "Trinity Large Preview (free)"},
+    # yice 内网网关 — 离线部署唯一可用模型
+    {"provider": "yice", "id": "Qwen3.5-397B-A17B", "label": "Qwen3.5-397B-A17B"},
 ]
 
 # Provider display names for known Hermes provider IDs
 _PROVIDER_DISPLAY = {
-    "nous": "Nous Portal",
-    "openrouter": "OpenRouter",
-    "anthropic": "Anthropic",
-    "openai": "OpenAI",
-    "openai-codex": "OpenAI Codex",
-    "copilot": "GitHub Copilot",
-    "zai": "Z.AI / GLM",
-    "kimi-coding": "Kimi / Moonshot",
-    "deepseek": "DeepSeek",
-    "minimax": "MiniMax",
-    "minimax-cn": "MiniMax (China)",
-    "google": "Google",
-    "meta-llama": "Meta Llama",
-    "huggingface": "HuggingFace",
-    "alibaba": "Alibaba",
-    "ollama": "Ollama",
-    "ollama-cloud": "Ollama Cloud",
-    "opencode-zen": "OpenCode Zen",
-    "opencode-go": "OpenCode Go",
-    "lmstudio": "LM Studio",
-    "mistralai": "Mistral",
-    "qwen": "Qwen",
-    "x-ai": "xAI",
-    "nvidia": "NVIDIA NIM",
+    # yice 内网网关 — 离线部署唯一可见 provider
+    "yice": "yice",
+    # 以下条目仅供内部兼容（路由/别名解析），不向用户展示
+    "custom": "Custom",
 }
 
 # Provider alias → canonical slug.  Users configure providers using the
@@ -900,175 +837,10 @@ def _named_custom_provider_slug_for_base_url(
 
 
 # Well-known models per provider (used to populate dropdown for direct API providers)
+# yice 离线部署：只保留唯一内网网关及其模型
 _PROVIDER_MODELS = {
-    "anthropic": [
-        {"id": "claude-opus-4.7", "label": "Claude Opus 4.7"},
-        {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
-        {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
-        {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
-        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
-    ],
-    "openai": [
-        {"id": "gpt-5.5",      "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.4",      "label": "GPT-5.4"},
-    ],
-    "openai-codex": [
-        {"id": "gpt-5.5", "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
-        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
-        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
-        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
-        {"id": "codex-mini-latest", "label": "Codex Mini (latest)"},
-    ],
-    "google": [
-        {"id": "gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
-    ],
-    "deepseek": [
-        {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
-        {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
-        {"id": "deepseek-chat-v3-0324", "label": "DeepSeek V3 (legacy)"},
-        {"id": "deepseek-reasoner", "label": "DeepSeek Reasoner (legacy)"},
-    ],
-    "nous": [
-        {"id": "@nous:anthropic/claude-opus-4.6",     "label": "Claude Opus 4.6 (via Nous)"},
-        {"id": "@nous:anthropic/claude-sonnet-4.6",   "label": "Claude Sonnet 4.6 (via Nous)"},
-        {"id": "@nous:openai/gpt-5.4-mini",           "label": "GPT-5.4 Mini (via Nous)"},
-        {"id": "@nous:google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview (via Nous)"},
-    ],
-    "zai": [
-        {"id": "glm-5.1", "label": "GLM-5.1"},
-        {"id": "glm-5", "label": "GLM-5"},
-        {"id": "glm-5-turbo", "label": "GLM-5 Turbo"},
-        {"id": "glm-4.7", "label": "GLM-4.7"},
-        {"id": "glm-4.5", "label": "GLM-4.5"},
-        {"id": "glm-4.5-flash", "label": "GLM-4.5 Flash"},
-    ],
-    "kimi-coding": [
-        {"id": "moonshot-v1-8k", "label": "Moonshot v1 8k"},
-        {"id": "moonshot-v1-32k", "label": "Moonshot v1 32k"},
-        {"id": "moonshot-v1-128k", "label": "Moonshot v1 128k"},
-        {"id": "kimi-latest", "label": "Kimi Latest"},
-        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
-    ],
-    "minimax": [
-        {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
-        {"id": "MiniMax-M2.7-highspeed", "label": "MiniMax M2.7 Highspeed"},
-        {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
-        {"id": "MiniMax-M2.5-highspeed", "label": "MiniMax M2.5 Highspeed"},
-        {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"},
-    ],
-    "minimax-cn": [
-        {"id": "MiniMax-M2.7", "label": "MiniMax M2.7"},
-        {"id": "MiniMax-M2.5", "label": "MiniMax M2.5"},
-        {"id": "MiniMax-M2.1", "label": "MiniMax M2.1"},
-        {"id": "MiniMax-M2", "label": "MiniMax M2"},
-    ],
-    # GitHub Copilot — model IDs served via the Copilot API
-    "copilot": [
-        {"id": "gpt-5.5", "label": "GPT-5.5"},
-        {"id": "gpt-5.5-mini", "label": "GPT-5.5 Mini"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-4o", "label": "GPT-4o"},
-        {"id": "claude-opus-4.6", "label": "Claude Opus 4.6"},
-        {"id": "claude-sonnet-4.6", "label": "Claude Sonnet 4.6"},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-    ],
-    # OpenCode Zen — curated models via opencode.ai/zen (pay-as-you-go credits)
-    "opencode-zen": [
-        {"id": "gpt-5.4-pro", "label": "GPT-5.4 Pro"},
-        {"id": "gpt-5.4", "label": "GPT-5.4"},
-        {"id": "gpt-5.4-mini", "label": "GPT-5.4 Mini"},
-        {"id": "gpt-5.4-nano", "label": "GPT-5.4 Nano"},
-        {"id": "gpt-5.3-codex", "label": "GPT-5.3 Codex"},
-        {"id": "gpt-5.3-codex-spark", "label": "GPT-5.3 Codex Spark"},
-        {"id": "gpt-5.2", "label": "GPT-5.2"},
-        {"id": "gpt-5.2-codex", "label": "GPT-5.2 Codex"},
-        {"id": "gpt-5.1", "label": "GPT-5.1"},
-        {"id": "gpt-5.1-codex", "label": "GPT-5.1 Codex"},
-        {"id": "gpt-5.1-codex-max", "label": "GPT-5.1 Codex Max"},
-        {"id": "gpt-5.1-codex-mini", "label": "GPT-5.1 Codex Mini"},
-        {"id": "gpt-5", "label": "GPT-5"},
-        {"id": "gpt-5-codex", "label": "GPT-5 Codex"},
-        {"id": "gpt-5-nano", "label": "GPT-5 Nano"},
-        {"id": "claude-opus-4-7", "label": "Claude Opus 4.7"},
-        {"id": "claude-opus-4-6", "label": "Claude Opus 4.6"},
-        {"id": "claude-opus-4-5", "label": "Claude Opus 4.5"},
-        {"id": "claude-opus-4-1", "label": "Claude Opus 4.1"},
-        {"id": "claude-sonnet-4-6", "label": "Claude Sonnet 4.6"},
-        {"id": "claude-sonnet-4-5", "label": "Claude Sonnet 4.5"},
-        {"id": "claude-sonnet-4", "label": "Claude Sonnet 4"},
-        {"id": "claude-haiku-4-5", "label": "Claude Haiku 4.5"},
-        {"id": "claude-3-5-haiku", "label": "Claude 3.5 Haiku"},
-        {"id": "gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview", "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
-        {"id": "glm-5.1", "label": "GLM-5.1"},
-        {"id": "glm-5", "label": "GLM-5"},
-        {"id": "kimi-k2.5", "label": "Kimi K2.5"},
-        {"id": "minimax-m2.5", "label": "MiniMax M2.5"},
-        {"id": "minimax-m2.5-free", "label": "MiniMax M2.5 Free"},
-        {"id": "nemotron-3-super-free", "label": "Nemotron 3 Super Free"},
-        {"id": "big-pickle", "label": "Big Pickle"},
-    ],
-    # OpenCode Go — flat-rate models via opencode.ai/go ($10/month)
-    "opencode-go": [
-        {"id": "glm-5.1",          "label": "GLM-5.1"},
-        {"id": "glm-5",            "label": "GLM-5"},
-        {"id": "kimi-k2.5",        "label": "Kimi K2.5"},
-        {"id": "kimi-k2.6",        "label": "Kimi K2.6"},
-        {"id": "deepseek-v4-pro",  "label": "DeepSeek V4 Pro"},
-        {"id": "deepseek-v4-flash","label": "DeepSeek V4 Flash"},
-        {"id": "mimo-v2-pro",      "label": "MiMo V2 Pro"},
-        {"id": "mimo-v2-omni",     "label": "MiMo V2 Omni"},
-        {"id": "mimo-v2.5-pro",    "label": "MiMo V2.5 Pro"},
-        {"id": "mimo-v2.5",        "label": "MiMo V2.5"},
-        {"id": "minimax-m2.7",     "label": "MiniMax M2.7"},
-        {"id": "minimax-m2.5",     "label": "MiniMax M2.5"},
-        {"id": "qwen3.6-plus",     "label": "Qwen3.6 Plus"},
-        {"id": "qwen3.5-plus",     "label": "Qwen3.5 Plus"},
-    ],
-    # 'gemini' is the hermes_cli provider ID for Google AI Studio
-    # Model IDs are bare — sent directly to:
-    #   https://generativelanguage.googleapis.com/v1beta/openai/chat/completions
-    "gemini": [
-        {"id": "gemini-3.1-pro-preview",            "label": "Gemini 3.1 Pro Preview"},
-        {"id": "gemini-3-flash-preview",            "label": "Gemini 3 Flash Preview"},
-        {"id": "gemini-3.1-flash-lite-preview",     "label": "Gemini 3.1 Flash Lite Preview"},
-        {"id": "gemini-2.5-pro",                    "label": "Gemini 2.5 Pro"},
-        {"id": "gemini-2.5-flash",                  "label": "Gemini 2.5 Flash"},
-    ],
-    # Mistral — prefix used in OpenRouter model IDs (mistralai/mistral-large-latest)
-    "mistralai": [
-        {"id": "mistral-large-latest", "label": "Mistral Large"},
-        {"id": "mistral-small-latest", "label": "Mistral Small"},
-    ],
-    # Qwen (Alibaba) — prefix used in OpenRouter model IDs (qwen/qwen3-coder)
-    "qwen": [
-        {"id": "qwen3-coder",   "label": "Qwen3 Coder"},
-        {"id": "qwen3.6-plus",  "label": "Qwen3.6 Plus"},
-    ],
-    # NVIDIA NIM — NVIDIA's inference platform
-    "nvidia": [
-        {"id": "nvidia/nemotron-3-super-120b-a12b", "label": "Nemotron 3 Super 120B"},
-        {"id": "nvidia/nemotron-3-nano-30b-a3b", "label": "Nemotron 3 Nano 30B"},
-        {"id": "nvidia/llama-3.3-nemotron-super-49b-v1.5", "label": "Llama 3.3 Nemotron Super 49B"},
-        {"id": "qwen/qwen3-next-80b-a3b-instruct", "label": "Qwen3 Next 80B"},
-    ],
-    # xAI — prefix used in OpenRouter model IDs (x-ai/grok-4-20)
-    "x-ai": [
-        {"id": "grok-4.20", "label": "Grok 4.20"},
+    "yice": [
+        {"id": "Qwen3.5-397B-A17B", "label": "Qwen3.5-397B-A17B"},
     ],
 }
 
@@ -2386,6 +2158,21 @@ def _read_visible_codex_cache_model_ids() -> list[str]:
     return ordered
 
 
+def _offline_filter_models(result: dict) -> dict:
+    """离线版硬收敛：确保返回给前端的 models 只含 yice / Qwen3.5-397B-A17B。"""
+    _ONLY_PROVIDER = "yice"
+    _ONLY_MODEL = "Qwen3.5-397B-A17B"
+    filtered = [g for g in (result.get("groups") or []) if (g.get("provider_id") or "").lower() == _ONLY_PROVIDER]
+    if not filtered:
+        filtered = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _ONLY_MODEL, "label": _ONLY_MODEL}]}]
+    return {
+        "active_provider": _ONLY_PROVIDER,
+        "default_model": _ONLY_MODEL,
+        "configured_model_badges": result.get("configured_model_badges", {}),
+        "groups": filtered,
+    }
+
+
 def get_available_models() -> dict:
     """
     Return available models grouped by provider.
@@ -3458,6 +3245,15 @@ def get_available_models() -> dict:
             or (g.get("provider_id") or "").startswith("custom:")
         ]
 
+        # 离线版硬收敛：只向前端暴露 yice provider 及其唯一模型
+        _OFFLINE_ONLY_PROVIDER = "yice"
+        _OFFLINE_ONLY_MODEL = "Qwen3.5-397B-A17B"
+        groups = [g for g in groups if (g.get("provider_id") or "").lower() == _OFFLINE_ONLY_PROVIDER]
+        if not groups:
+            groups = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _OFFLINE_ONLY_MODEL, "label": _OFFLINE_ONLY_MODEL}]}]
+        active_provider = _OFFLINE_ONLY_PROVIDER
+        default_model = _OFFLINE_ONLY_MODEL
+
         return {
             "active_provider": active_provider,
             "default_model": default_model,
@@ -3496,7 +3292,7 @@ def get_available_models() -> dict:
             )
             cached = _get_fresh_memory_models_cache(time.monotonic())
             if cached is not None:
-                return cached
+                return _offline_filter_models(cached)
 
         # Reload config if changed
         if _cfg_changed:
@@ -3510,7 +3306,7 @@ def get_available_models() -> dict:
         now = time.monotonic()
         cached = _get_fresh_memory_models_cache(now)
         if cached is not None:
-            return cached
+            return _offline_filter_models(cached)
 
         # Cold path: disk cache hit — use it (fast, no lock contention)
         if disk_groups is not None:
@@ -3518,7 +3314,7 @@ def get_available_models() -> dict:
             _available_models_cache_ts = now
             _available_models_cache_source_fingerprint = _models_cache_source_fingerprint()
             _save_models_cache_to_disk(disk_groups)
-            return copy.deepcopy(disk_groups)
+            return _offline_filter_models(copy.deepcopy(disk_groups))
 
         # Cold path: full rebuild — only one thread reaches here at a time
         with _cache_build_cv:
@@ -3538,7 +3334,7 @@ def get_available_models() -> dict:
             _cache_build_in_progress = False
             _cache_build_cv.notify_all()
         _save_models_cache_to_disk(result)
-        return copy.deepcopy(result)
+        return _offline_filter_models(copy.deepcopy(result))
 
 
 # ── Static file path ─────────────────────────────────────────────────────────
@@ -3684,7 +3480,7 @@ _SETTINGS_DEFAULTS = {
     "font_size": "default",  # small | default | large
     "session_jump_buttons": False,  # show Start/End transcript jump pills
     "session_endless_scroll": False,  # auto-load older transcript pages while scrolling upward
-    "language": "en",  # UI locale code; must match a key in static/i18n.js LOCALES
+    "language": "zh",  # UI locale code; must match a key in static/i18n.js LOCALES
     "bot_name": os.getenv(
         "HERMES_WEBUI_BOT_NAME", "Hermes"
     ),  # display name for the assistant
