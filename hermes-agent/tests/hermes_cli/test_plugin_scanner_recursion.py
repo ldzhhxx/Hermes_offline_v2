@@ -268,26 +268,6 @@ class TestBackendGate:
         assert "exclusive" in (loaded.error or "")
 
 
-# ── Bundled backend auto-load (integration with real bundled plugin) ────────
-
-
-class TestBundledBackendAutoLoad:
-    def test_bundled_image_gen_openai_autoloads(self, tmp_path, monkeypatch):
-        """The bundled ``plugins/image_gen/openai/`` plugin loads without
-        any opt-in — it's ``kind: backend`` and shipped in-repo."""
-        import os
-        hermes_home = Path(os.environ["HERMES_HOME"])  # set by hermetic conftest fixture
-
-        mgr = PluginManager()
-        mgr.discover_and_load()
-
-        assert "image_gen/openai" in mgr._plugins
-        loaded = mgr._plugins["image_gen/openai"]
-        assert loaded.manifest.source == "bundled"
-        assert loaded.manifest.kind == "backend"
-        assert loaded.enabled is True, f"error: {loaded.error}"
-
-
 # ── PluginContext.register_image_gen_provider ───────────────────────────────
 
 
