@@ -1,6 +1,6 @@
 ---
 name: writing-plans
-description: "编写实施计划：细粒度任务、文件路径、完整代码。"
+description: "Write implementation plans: bite-sized tasks, paths, code."
 version: 1.1.0
 author: Hermes Agent (adapted from obra/superpowers)
 license: MIT
@@ -11,46 +11,46 @@ metadata:
     related_skills: [subagent-driven-development, test-driven-development, requesting-code-review]
 ---
 
-# 编写实施计划
+# Writing Implementation Plans
 
-## 概述
+## Overview
 
-编写全面的实施计划，假设实施者对代码库零了解、品味存疑。记录他们需要的一切：要改哪些文件、完整代码、测试命令、要查的文档、如何验证。给他们细粒度的任务。DRY、YAGNI、TDD、频繁提交。
+Write comprehensive implementation plans assuming the implementer has zero context for the codebase and questionable taste. Document everything they need: which files to touch, complete code, testing commands, docs to check, how to verify. Give them bite-sized tasks. DRY. YAGNI. TDD. Frequent commits.
 
-假设实施者是有经验的开发者，但对工具集或问题领域几乎一无所知。假设他们不太擅长好的测试设计。
+Assume the implementer is a skilled developer but knows almost nothing about the toolset or problem domain. Assume they don't know good test design very well.
 
-**核心原则：** 好的计划让实施变得显而易见。如果有人需要猜测，计划就是不完整的。
+**Core principle:** A good plan makes implementation obvious. If someone has to guess, the plan is incomplete.
 
-## 适用场景
+## When to Use
 
-**以下情况始终使用：**
-- 实施多步骤功能之前
-- 拆解复杂需求时
-- 通过 subagent-driven-development 委托给子 agent 时
+**Always use before:**
+- Implementing multi-step features
+- Breaking down complex requirements
+- Delegating to subagents via subagent-driven-development
 
-**以下情况不要跳过：**
-- 功能看起来很简单（假设会导致 bug）
-- 你打算自己实施（未来的你需要指引）
-- 独自工作时（文档很重要）
+**Don't skip when:**
+- Feature seems simple (assumptions cause bugs)
+- You plan to implement it yourself (future you needs guidance)
+- Working alone (documentation matters)
 
-## 细粒度任务
+## Bite-Sized Task Granularity
 
-**每个任务 = 2-5 分钟的专注工作。**
+**Each task = 2-5 minutes of focused work.**
 
-每一步都是一个动作：
-- "写失败的测试" — 一步
-- "运行它确认失败" — 一步
-- "写最少的代码让测试通过" — 一步
-- "运行测试确认通过" — 一步
-- "提交" — 一步
+Every step is one action:
+- "Write the failing test" — step
+- "Run it to make sure it fails" — step
+- "Implement the minimal code to make the test pass" — step
+- "Run the tests and make sure they pass" — step
+- "Commit" — step
 
-**太大：**
+**Too big:**
 ```markdown
 ### Task 1: Build authentication system
 [50 lines of code across 5 files]
 ```
 
-**合适的大小：**
+**Right size:**
 ```markdown
 ### Task 1: Create User model with email field
 [10 lines, 1 file]
@@ -62,11 +62,11 @@ metadata:
 [15 lines, 1 file]
 ```
 
-## 计划文档结构
+## Plan Document Structure
 
-### 头部（必须）
+### Header (Required)
 
-每个计划必须以此开头：
+Every plan MUST start with:
 
 ```markdown
 # [Feature Name] Implementation Plan
@@ -82,9 +82,9 @@ metadata:
 ---
 ```
 
-### 任务结构
+### Task Structure
 
-每个任务遵循此格式：
+Each task follows this format:
 
 ````markdown
 ### Task N: [Descriptive Name]
@@ -129,19 +129,19 @@ git commit -m "feat: add specific feature"
 ```
 ````
 
-## 编写流程
+## Writing Process
 
-### 步骤 1：理解需求
+### Step 1: Understand Requirements
 
-阅读并理解：
-- 功能需求
-- 设计文档或用户描述
-- 验收标准
-- 约束条件
+Read and understand:
+- Feature requirements
+- Design documents or user description
+- Acceptance criteria
+- Constraints
 
-### 步骤 2：探索代码库
+### Step 2: Explore the Codebase
 
-用 Hermes 工具了解项目：
+Use Hermes tools to understand the project:
 
 ```python
 # Understand project structure
@@ -157,43 +157,43 @@ search_files("*.py", target="files", path="tests/")
 read_file("src/app.py")
 ```
 
-### 步骤 3：设计方案
+### Step 3: Design Approach
 
-决定：
-- 架构模式
-- 文件组织
-- 所需依赖
-- 测试策略
+Decide:
+- Architecture pattern
+- File organization
+- Dependencies needed
+- Testing strategy
 
-### 步骤 4：编写任务
+### Step 4: Write Tasks
 
-按顺序创建任务：
-1. 基础设施/搭建
-2. 核心功能（每个都用 TDD）
-3. 边界情况
-4. 集成
-5. 清理/文档
+Create tasks in order:
+1. Setup/infrastructure
+2. Core functionality (TDD for each)
+3. Edge cases
+4. Integration
+5. Cleanup/documentation
 
-### 步骤 5：添加完整细节
+### Step 5: Add Complete Details
 
-每个任务包含：
-- **精确文件路径**（不是"配置文件"，而是 `src/config/settings.py`）
-- **完整代码示例**（不是"添加验证"，而是实际代码）
-- **精确命令**及预期输出
-- **验证步骤**证明任务有效
+For each task, include:
+- **Exact file paths** (not "the config file" but `src/config/settings.py`)
+- **Complete code examples** (not "add validation" but the actual code)
+- **Exact commands** with expected output
+- **Verification steps** that prove the task works
 
-### 步骤 6：审查计划
+### Step 6: Review the Plan
 
-检查：
-- [ ] 任务顺序合理
-- [ ] 每个任务细粒度（2-5 分钟）
-- [ ] 文件路径精确
-- [ ] 代码示例完整（可直接复制粘贴）
-- [ ] 命令精确且有预期输出
-- [ ] 没有缺失的上下文
-- [ ] 应用了 DRY、YAGNI、TDD 原则
+Check:
+- [ ] Tasks are sequential and logical
+- [ ] Each task is bite-sized (2-5 min)
+- [ ] File paths are exact
+- [ ] Code examples are complete (copy-pasteable)
+- [ ] Commands are exact with expected output
+- [ ] No missing context
+- [ ] DRY, YAGNI, TDD principles applied
 
-### 步骤 7：保存计划
+### Step 7: Save the Plan
 
 ```bash
 mkdir -p docs/plans
@@ -202,17 +202,17 @@ git add docs/plans/
 git commit -m "docs: add implementation plan for [feature]"
 ```
 
-## 原则
+## Principles
 
-### DRY（不要重复自己）
+### DRY (Don't Repeat Yourself)
 
-**坏：** 在 3 个地方复制粘贴验证逻辑
-**好：** 提取验证函数，到处使用
+**Bad:** Copy-paste validation in 3 places
+**Good:** Extract validation function, use everywhere
 
-### YAGNI（你不会需要它）
+### YAGNI (You Aren't Gonna Need It)
 
-**坏：** 为未来需求添加"灵活性"
-**好：** 只实现现在需要的
+**Bad:** Add "flexibility" for future requirements
+**Good:** Implement only what's needed now
 
 ```python
 # Bad — YAGNI violation
@@ -230,59 +230,59 @@ class User:
         self.email = email
 ```
 
-### TDD（测试驱动开发）
+### TDD (Test-Driven Development)
 
-每个产出代码的任务都应包含完整的 TDD 循环：
-1. 写失败测试
-2. 运行验证失败
-3. 写最少代码
-4. 运行验证通过
+Every task that produces code should include the full TDD cycle:
+1. Write failing test
+2. Run to verify failure
+3. Write minimal code
+4. Run to verify pass
 
-详见 `test-driven-development` skill。
+See `test-driven-development` skill for details.
 
-### 频繁提交
+### Frequent Commits
 
-每个任务后提交：
+Commit after every task:
 ```bash
 git add [files]
 git commit -m "type: description"
 ```
 
-## 常见错误
+## Common Mistakes
 
-### 任务描述模糊
+### Vague Tasks
 
-**坏：** "添加认证"
-**好：** "创建带 email 和 password_hash 字段的 User 模型"
+**Bad:** "Add authentication"
+**Good:** "Create User model with email and password_hash fields"
 
-### 代码不完整
+### Incomplete Code
 
-**坏：** "步骤 1：添加验证函数"
-**好：** "步骤 1：添加验证函数"后跟完整的函数代码
+**Bad:** "Step 1: Add validation function"
+**Good:** "Step 1: Add validation function" followed by the complete function code
 
-### 缺少验证
+### Missing Verification
 
-**坏：** "步骤 3：测试它能用"
-**好：** "步骤 3：运行 `pytest tests/test_auth.py -v`，预期：3 passed"
+**Bad:** "Step 3: Test it works"
+**Good:** "Step 3: Run `pytest tests/test_auth.py -v`, expected: 3 passed"
 
-### 缺少文件路径
+### Missing File Paths
 
-**坏：** "创建模型文件"
-**好：** "创建：`src/models/user.py`"
+**Bad:** "Create the model file"
+**Good:** "Create: `src/models/user.py`"
 
-## 执行交接
+## Execution Handoff
 
-保存计划后，提供执行方案：
+After saving the plan, offer the execution approach:
 
-**"计划已完成并保存。准备使用 subagent-driven-development 执行——我将为每个任务派发一个新的子 agent，进行两阶段审查（规格合规性，然后代码质量）。是否继续？"**
+**"Plan complete and saved. Ready to execute using subagent-driven-development — I'll dispatch a fresh subagent per task with two-stage review (spec compliance then code quality). Shall I proceed?"**
 
-执行时，使用 `subagent-driven-development` skill：
-- 每个任务一个新的 `delegate_task`，带完整上下文
-- 每个任务后进行规格合规性审查
-- 规格通过后进行代码质量审查
-- 两个审查都通过后才继续
+When executing, use the `subagent-driven-development` skill:
+- Fresh `delegate_task` per task with full context
+- Spec compliance review after each task
+- Code quality review after spec passes
+- Proceed only when both reviews approve
 
-## 记住
+## Remember
 
 ```
 Bite-sized tasks (2-5 min each)
@@ -294,4 +294,4 @@ DRY, YAGNI, TDD
 Frequent commits
 ```
 
-**好的计划让实施变得显而易见。**
+**A good plan makes implementation obvious.**
