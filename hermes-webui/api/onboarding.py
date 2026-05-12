@@ -339,6 +339,14 @@ def _extract_current_provider(cfg: dict) -> str:
     if isinstance(model_cfg, dict):
         provider = str(model_cfg.get("provider") or "").strip().lower()
         if provider:
+            # Offline yice is stored in runtime config as custom:yice so Hermes can
+            # resolve it through custom_providers. WebUI onboarding/status should
+            # still treat that as the built-in yice setup option instead of showing
+            # it as an unknown/unconfigured provider.
+            if provider.startswith("custom:"):
+                named = provider.split(":", 1)[1].strip().lower()
+                if named in _SUPPORTED_PROVIDER_SETUPS:
+                    return named
             return provider
     return ""
 
