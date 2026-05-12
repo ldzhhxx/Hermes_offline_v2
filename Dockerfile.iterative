@@ -14,7 +14,8 @@
 #
 # This Dockerfile assumes:
 #   - The base image already has the venv, node_modules, system packages.
-#   - Only source code (hermes-agent, hermes-webui, scripts) is refreshed.
+#   - Source code plus image-config (hermes-agent, hermes-webui, scripts,
+#     image-config) is refreshed.
 #   - If dependencies changed (pyproject.toml, requirements.txt, package.json),
 #     use the full Dockerfile instead or pass REINSTALL_DEPS=1.
 
@@ -55,10 +56,12 @@ RUN set -eux; \
       npm config set registry "$NPM_REGISTRY"; \
     fi
 
-# Copy updated source code
+# Copy updated source code and image-baked runtime config
 COPY hermes-agent ./hermes-agent
 COPY hermes-webui ./hermes-webui
 COPY scripts ./scripts
+COPY image-config/config.yaml /home/hermes/.hermes/config.yaml
+COPY image-config/.env /home/hermes/.hermes/.env
 
 # Reinstall deps only if REINSTALL_DEPS is set (e.g. after pyproject.toml change)
 RUN set -eux; \
@@ -69,4 +72,4 @@ RUN set -eux; \
     fi
 
 RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/start-dev.sh \
-    && chown -R hermes:hermes /opt/hermes-offline
+    && chown -R hermes:hermes /opt/hermes-offline /home/hermes/.hermes

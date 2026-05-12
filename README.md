@@ -305,7 +305,7 @@ docker logs -f hermes-offline-dev
 
 ## 🔄 迭代重建（Dockerfile.iterative）
 
-当你已经在有网环境构建过一次完整镜像后，后续只修改了前端/后端代码，可以使用 `Dockerfile.iterative` 在内网快速重建，无需重新安装所有依赖：
+当你已经在有网环境构建过一次完整镜像后，后续修改了前端/后端代码或 `image-config` 中的镜像内配置，可以使用 `Dockerfile.iterative` 在内网快速重建，无需重新安装所有依赖：
 
 ```bash
 # 假设完整镜像已构建为 hermes-offline:base
@@ -319,6 +319,8 @@ docker build -f Dockerfile.iterative \
 ```
 
 若依赖文件（`pyproject.toml`、`requirements.txt`、`package.json`）也有变更，追加 `--build-arg REINSTALL_DEPS=1`。
+
+注意：`Dockerfile.iterative` 现在也会刷新 `image-config/config.yaml` 和 `image-config/.env`。如果运行时再额外挂载 `/home/hermes/.hermes`，仍然会覆盖镜像内配置。
 
 ---
 
