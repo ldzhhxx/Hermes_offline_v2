@@ -78,8 +78,9 @@ RUN useradd --create-home --home-dir /home/hermes --shell /bin/bash hermes \
 
 COPY image-config/config.yaml /home/hermes/.hermes/config.yaml
 COPY image-config/.env /home/hermes/.hermes/.env
+COPY image-config/.env /opt/hermes-offline/image-config/.env.baked
 
-RUN chown hermes:hermes /home/hermes/.hermes/config.yaml /home/hermes/.hermes/.env
+RUN chown hermes:hermes /home/hermes/.hermes/config.yaml /home/hermes/.hermes/.env /opt/hermes-offline/image-config/.env.baked
 
 # Start as root so the entrypoint can fix ownership of bind-mounted
 # ./data and ./workspace directories created by Docker on the host.

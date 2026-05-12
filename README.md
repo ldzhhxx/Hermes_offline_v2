@@ -43,8 +43,6 @@ Hermes Offline v2 是 Hermes 的**离线化改造版本**，把 Agent 后端与 
 | `Dockerfile`             | 构建包含 Python、Node.js、Agent、WebUI 的镜像      |
 | `scripts/start.sh`       | 容器入口：同时启动 Agent API 与 WebUI              |
 | `scripts/start-dev.sh`   | 开发模式入口：监听源码变化并自动重启               |
-| `docker-compose.yml`     | 标准运行：端口映射 + 数据卷挂载                   |
-| `docker-compose.dev.yml` | 开发运行：把本地源码挂载进容器                    |
 | `.env.docker.example`    | 可选环境变量示例                                  |
 
 ---
@@ -52,11 +50,21 @@ Hermes Offline v2 是 Hermes 的**离线化改造版本**，把 Agent 后端与 
 ## 🚀 快速开始（3 步启动）
 
 ```bash
+# 0) 先编辑 image-config/.env，至少设置：
+# HERMES_LAUNCH_KEY_REQUIRED=my-secret-2026
+
 # 1) 构建镜像
 docker build -t hermes-offline:latest .
 
 # 2) 启动服务（数据与工作区自动持久化到宿主机）
-docker compose up -d
+docker run -d \
+  --name hermes-offline \
+  -p 18789:18789 \
+  -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
+  -v $(pwd)/data:/home/hermes/.hermes \
+  -v $(pwd)/workspace:/home/hermes/workspace \
+  hermes-offline:latest
 
 # 3) 在浏览器访问
 http://localhost:18789
@@ -107,20 +115,14 @@ http://localhost:18789
 
 ## 🐳 Docker 部署详解
 
-### 方案 A：`docker compose`（推荐）
-
-```bash
-docker compose up -d
-docker logs -f hermes-offline
-```
-
-### 方案 B：`docker run`
+### 标准运行：`docker run`
 
 ```bash
 docker run -d \
   --name hermes-offline \
   -p 18789:18789 \
   -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
   -v $(pwd)/data:/home/hermes/.hermes \
   -v $(pwd)/workspace:/home/hermes/workspace \
   hermes-offline:latest
@@ -133,6 +135,7 @@ docker run -d \
   --name hermes-offline \
   -p 18789:18789 \
   -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
   -e API_SERVER_KEY="$(openssl rand -hex 32)" \
   -v $(pwd)/data:/home/hermes/.hermes \
   -v $(pwd)/workspace:/home/hermes/workspace \
@@ -141,7 +144,7 @@ docker run -d \
 
 ### 数据卷说明
 
-`docker-compose.yml` 默认挂载两个持久化目录：
+默认挂载两个持久化目录：
 
 | 宿主机路径       | 容器内路径               | 作用                                             |
 | ---------------- | ------------------------ | ------------------------------------------------ |
@@ -171,6 +174,8 @@ docker run -d \
 > ⚠️ **两者均非空且相等时，容器才会启动。** 只设置 build 时密钥还不够，运行时还必须显式传入匹配值。
 >
 > 此变量与 `API_SERVER_KEY`（Agent API 访问鉴权）完全独立，用途不同，请勿混淆。
+>
+> 构建时 `image-config/.env` 中的 `HERMES_LAUNCH_KEY_REQUIRED` 会额外烘焙到镜像内的 `/opt/hermes-offline/image-config/.env.baked`，启动脚本优先从这里读取，因此不会被 `docker run -v $(pwd)/data:/home/hermes/.hermes` 这类挂载覆盖。
 
 **最短可用示例：**
 
@@ -250,7 +255,6 @@ docker build \
 
 ### 工作机制
 
-- `docker-compose.dev.yml`：把本地源码目录挂载进容器
 - `scripts/start-dev.sh`：每 2 秒检测源码变化，自动重启 Agent 和 WebUI
 - 监听文件类型：`.py` / `.js` / `.html` / `.css` / 相关配置文件
 
@@ -260,21 +264,13 @@ docker build \
 
 ### 启动开发模式
 
-**方式 1：Docker Compose**
-
-```bash
-docker compose -f docker-compose.dev.yml up -d
-docker logs -f hermes-offline-dev
-```
-
-**方式 2：docker run（无 Compose 插件时）**
-
 ```bash
 docker run -d \
   --name hermes-offline-dev \
   --entrypoint /opt/hermes-offline/scripts/start-dev.sh \
   -p 18789:18789 \
   -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
   -v $(pwd)/hermes-agent:/opt/hermes-offline/hermes-agent \
   -v $(pwd)/hermes-webui:/opt/hermes-offline/hermes-webui \
   -v $(pwd)/scripts:/opt/hermes-offline/scripts \
@@ -310,11 +306,7 @@ docker run -d \
 ### 停止开发模式
 
 ```bash
-# 方式 1
 docker rm -f hermes-offline-dev
-
-# 方式 2
-docker compose -f docker-compose.dev.yml down
 ```
 
 ---

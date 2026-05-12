@@ -20,6 +20,17 @@ shutdown() {
 
 trap 'shutdown 143' TERM INT
 
+BAKED_ENV_FILE="${HERMES_BAKED_ENV_FILE:-/opt/hermes-offline/image-config/.env.baked}"
+
+# 优先读取镜像构建期烘焙进去的 env 文件。这个路径不在 /home/hermes/.hermes 下，
+# 不会被 volume 覆盖，适合放启动门禁这类“镜像内固定值”。
+if [[ -f "${BAKED_ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  set -a
+  source "${BAKED_ENV_FILE}"
+  set +a
+fi
+
 # ── 启动密钥门禁 ────────────────────────────────────────────────────────────
 # HERMES_LAUNCH_KEY_REQUIRED : build 阶段烘焙进镜像的期望密钥（明文）
 # HERMES_LAUNCH_KEY          : 运行时必须由调用方通过 -e 显式传入
@@ -69,6 +80,7 @@ export HERMES_WEBUI_PYTHON="${HERMES_WEBUI_PYTHON:-/opt/hermes-offline/.venv/bin
 export HERMES_WEBUI_STATE_DIR="${HERMES_WEBUI_STATE_DIR:-${HERMES_HOME}/webui}"
 export HERMES_WEBUI_SKIP_ONBOARDING="${HERMES_WEBUI_SKIP_ONBOARDING:-1}"
 export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-${HERMES_WORKSPACE}}"
+export HERMES_BAKED_ENV_FILE="${BAKED_ENV_FILE}"
 
 # Docker bind mounts created by `docker run -v ./data:/home/hermes/.hermes`
 # are commonly root-owned on the host. Start as root, create/chown the mounted
