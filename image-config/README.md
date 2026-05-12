@@ -25,10 +25,15 @@
 cp image-config/.env.example image-config/.env
 ```
 
-然后至少改这两个：
+然后至少改这个：
 
 ```env
-YICE_API_KEY=你的真实key
+YICE_API_KEY=***
+```
+
+如果你想自定义 API Server 的访问密钥，再额外加：
+
+```env
 API_SERVER_KEY=你自己定一个访问API用的key
 ```
 
