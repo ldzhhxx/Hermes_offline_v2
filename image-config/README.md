@@ -2,6 +2,57 @@
 
 这个目录专门放“打进镜像里的 Hermes 配置”。
 
+## 启动密钥门禁
+
+镜像内置了一道启动门禁：**即使拿到镜像，不知道密钥也无法启动容器**。
+
+### 工作原理
+
+| 阶段 | 操作 |
+|------|------|
+| `docker build` | `image-config/.env` 中的 `HERMES_LAUNCH_KEY_REQUIRED` 被烘焙进镜像 |
+| `docker run` | 必须通过 `-e HERMES_LAUNCH_KEY=<密钥>` 显式传入，与镜像内值比对 |
+
+两者均非空且相等时，容器才会继续启动。
+
+> ⚠️ **注意**：`HERMES_LAUNCH_KEY_REQUIRED` 与 `API_SERVER_KEY`（Agent API 访问鉴权）是完全独立的两个变量，用途不同，请勿混淆。
+
+### 配置步骤
+
+**Step 1：build 前，在 `image-config/.env` 中设置密钥**
+
+```env
+HERMES_LAUNCH_KEY_REQUIRED=my-secret-launch-key-2026
+```
+
+**Step 2：构建镜像**
+
+```bash
+docker build -t diagent-offline:latest .
+```
+
+**Step 3：运行时传入匹配的密钥**
+
+```bash
+docker run -d \
+  --name diagent-offline \
+  -p 18789:18789 \
+  -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-launch-key-2026 \
+  diagent-offline:latest
+```
+
+### 失败场景
+
+| 情况 | 日志输出 | 结果 |
+|------|----------|------|
+| 未传 `HERMES_LAUNCH_KEY` | `ERROR: 缺少启动密钥...` | 容器退出 |
+| 密钥不匹配 | `ERROR: 启动密钥不匹配...` | 容器退出 |
+| 镜像内 `HERMES_LAUNCH_KEY_REQUIRED` 为空 | `ERROR: 镜像内未设置启动密钥...` | 容器退出 |
+| 密钥正确 | `启动密钥校验通过。` | 正常启动 |
+
+---
+
 ## 你平时只需要改这两个文件
 
 ### 1. `config.yaml`

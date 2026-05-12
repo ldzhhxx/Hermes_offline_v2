@@ -20,6 +20,36 @@ shutdown() {
 
 trap 'shutdown 143' TERM INT
 
+# ── 启动密钥门禁 ────────────────────────────────────────────────────────────
+# HERMES_LAUNCH_KEY_REQUIRED : build 阶段烘焙进镜像的期望密钥（明文）
+# HERMES_LAUNCH_KEY          : 运行时必须由调用方通过 -e 显式传入
+#
+# 两者均非空且相等时，才允许继续启动。
+# 注意：此变量与 API_SERVER_KEY（Agent API 访问鉴权）完全独立，用途不同。
+_required_key="${HERMES_LAUNCH_KEY_REQUIRED:-}"
+_provided_key="${HERMES_LAUNCH_KEY:-}"
+
+if [[ -z "${_required_key}" ]]; then
+  log "ERROR: 镜像内未设置启动密钥（HERMES_LAUNCH_KEY_REQUIRED 为空）。"
+  log "       请在 image-config/.env 中设置 HERMES_LAUNCH_KEY_REQUIRED=<密钥> 后重新构建镜像。"
+  exit 1
+fi
+
+if [[ -z "${_provided_key}" ]]; then
+  log "ERROR: 缺少启动密钥。请在 docker run 时传入 -e HERMES_LAUNCH_KEY=<密钥>。"
+  exit 1
+fi
+
+if [[ "${_provided_key}" != "${_required_key}" ]]; then
+  log "ERROR: 启动密钥不匹配，容器拒绝启动。"
+  log "       请确认传入的 HERMES_LAUNCH_KEY 与镜像内预置的密钥一致。"
+  exit 1
+fi
+
+log "启动密钥校验通过。"
+unset _required_key _provided_key
+# ────────────────────────────────────────────────────────────────────────────
+
 export HERMES_HOME="${HERMES_HOME:-/home/hermes/.hermes}"
 export HERMES_WORKSPACE="${HERMES_WORKSPACE:-/home/hermes/workspace}"
 export HERMES_AGENT_HOST="${HERMES_AGENT_HOST:-0.0.0.0}"

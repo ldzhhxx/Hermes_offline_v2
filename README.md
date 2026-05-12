@@ -159,6 +159,36 @@ docker run -d \
 
 ## ⚙️ 环境变量
 
+### 启动密钥门禁（Launch Key Guard）
+
+镜像内置了一道启动门禁，防止镜像被他人直接运行。
+
+| 变量 | 说明 |
+|------|------|
+| `HERMES_LAUNCH_KEY_REQUIRED` | **build 阶段**烘焙进镜像的期望密钥，在 `image-config/.env` 中设置 |
+| `HERMES_LAUNCH_KEY` | **运行时**必须通过 `-e` 显式传入，与镜像内值比对 |
+
+> ⚠️ **两者均非空且相等时，容器才会启动。** 只设置 build 时密钥还不够，运行时还必须显式传入匹配值。
+>
+> 此变量与 `API_SERVER_KEY`（Agent API 访问鉴权）完全独立，用途不同，请勿混淆。
+
+**最短可用示例：**
+
+```bash
+# 1. build 前编辑 image-config/.env，设置：
+# HERMES_LAUNCH_KEY_REQUIRED=my-secret-2026
+
+# 2. 构建
+docker build -t hermes-offline:latest .
+
+# 3. 运行时传入匹配密钥
+docker run -d -p 18789:18789 -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
+  hermes-offline:latest
+```
+
+---
+
 ### 服务监听地址
 
 | 变量                   | 默认值      | 说明             |
