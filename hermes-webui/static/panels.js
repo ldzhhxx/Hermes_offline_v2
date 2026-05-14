@@ -4753,7 +4753,7 @@ function _buildPluginCard(plugin){
 
 // ── Providers panel ───────────────────────────────────────────────────────
 
-const _providerCardEls = new Map(); // providerId → {card, statusDot, input, saveBtn, removeBtn}
+const _providerCardEls = new Map(); // providerId → input refs/state
 
 async function loadProvidersPanel(){
   const list=$('providersList');
@@ -4767,9 +4767,10 @@ async function loadProvidersPanel(){
     _providerCardEls.clear();
     const quotaCard=_buildProviderQuotaCard(quota);
     if(quotaCard) list.appendChild(quotaCard);
+    list.appendChild(_buildCustomProviderCreateCard());
     if(providers.length===0){
-      list.style.display='none';
-      if(empty) empty.style.display='';
+      if(empty) empty.style.display='none';
+      list.style.display='';
       return;
     }
     if(empty) empty.style.display='none';
@@ -4868,17 +4869,79 @@ function _buildProviderQuotaCard(status){
   return card;
 }
 
+function _slugFromProviderName(name){
+  return String(name||'').trim().toLowerCase().replace(/\s+/g,'-');
+}
+
+function _providerField(labelText,input){
+  const field=document.createElement('div');
+  field.className='provider-card-field';
+  const label=document.createElement('label');
+  label.className='provider-card-label';
+  label.textContent=labelText;
+  field.appendChild(label);
+  field.appendChild(input);
+  return field;
+}
+
+function _buildCustomProviderCreateCard(){
+  const card=document.createElement('div');
+  card.className='provider-card open';
+  card.dataset.provider='__new_custom_provider__';
+  card.innerHTML=`
+    <div class="provider-card-header" style="cursor:default">
+      <div class="provider-card-info">
+        <div class="provider-card-name">Add custom provider</div>
+        <div class="provider-card-meta">OpenAI-compatible gateway · base URL · API key · model</div>
+      </div>
+    </div>
+  `;
+  const body=document.createElement('div');
+  body.className='provider-card-body';
+  const hint=document.createElement('div');
+  hint.className='provider-card-hint';
+  hint.textContent='Example base URL: http://10.8.4.23:36435/v1';
+  body.appendChild(hint);
+  const nameInput=document.createElement('input');
+  nameInput.className='provider-card-input';
+  nameInput.placeholder='Provider name';
+  const urlInput=document.createElement('input');
+  urlInput.className='provider-card-input';
+  urlInput.placeholder='Base URL';
+  const modelInput=document.createElement('input');
+  modelInput.className='provider-card-input';
+  modelInput.placeholder='Model name';
+  const keyInput=document.createElement('input');
+  keyInput.type='password';
+  keyInput.className='provider-card-input';
+  keyInput.placeholder='API key';
+  body.appendChild(_providerField('Name',nameInput));
+  body.appendChild(_providerField('Base URL',urlInput));
+  body.appendChild(_providerField('Model',modelInput));
+  body.appendChild(_providerField('API key',keyInput));
+  const row=document.createElement('div');
+  row.className='provider-card-row';
+  row.style.marginTop='8px';
+  const saveBtn=document.createElement('button');
+  saveBtn.type='button';
+  saveBtn.className='provider-card-btn provider-card-btn-primary';
+  saveBtn.textContent='Add Provider';
+  saveBtn.onclick=()=>_saveCustomProvider('__new_custom_provider__');
+  row.appendChild(saveBtn);
+  body.appendChild(row);
+  card.appendChild(body);
+  _providerCardEls.set('__new_custom_provider__',{nameInput,urlInput,modelInput,input:keyInput,saveBtn,isCreate:true});
+  return card;
+}
+
 function _buildProviderCard(p){
   const card=document.createElement('div');
   card.className='provider-card';
   card.dataset.provider=p.id;
-  // Use the is_oauth flag from the backend — it reflects _OAUTH_PROVIDERS in providers.py.
-  // key_source can be 'oauth' (hermes auth), 'config_yaml' (token in config.yaml), or 'none'.
   const isOauth=p.is_oauth===true;
-  // models_total reflects the complete catalog (e.g. 396 for a large-tier
-  // Nous Portal account). The "models" array may be trimmed to a featured
-  // subset for UI scannability — fall back to its length only when the
-  // server didn't supply models_total (older builds, custom providers).
+  const isCustom=p.is_custom===true || String(p.id||'').startsWith('custom:');
+  const removable=isCustom && p.removable!==false;
+  const customName=isCustom ? (p.display_name||String(p.id||'').replace(/^custom:/,'')) : '';
   const modelCount=Number.isFinite(p.models_total)
     ? p.models_total
     : (Array.isArray(p.models) ? p.models.length : 0);
@@ -4889,10 +4952,10 @@ function _buildProviderCard(p){
       : (p.has_key ? t('providers_status_api_key') : t('providers_status_not_configured_label'));
   const metaParts=[];
   if(modelCount>0) metaParts.push(modelCount+(modelCount===1?' model':' models'));
+  if(isCustom && p.base_url) metaParts.push(p.base_url);
   metaParts.push(sourceLabel);
   const metaText=metaParts.join(' · ');
 
-  // Clickable header (toggles body)
   const header=document.createElement('button');
   header.type='button';
   header.className='provider-card-header';
@@ -4929,6 +4992,25 @@ function _buildProviderCard(p){
     return card;
   }
 
+  let nameInput=null, urlInput=null, modelInput=null;
+  if(isCustom){
+    nameInput=document.createElement('input');
+    nameInput.className='provider-card-input';
+    nameInput.value=customName;
+    nameInput.disabled=true;
+    urlInput=document.createElement('input');
+    urlInput.className='provider-card-input';
+    urlInput.value=p.base_url||'';
+    urlInput.placeholder='Base URL';
+    modelInput=document.createElement('input');
+    modelInput.className='provider-card-input';
+    modelInput.value=(Array.isArray(p.models)&&p.models[0]&&p.models[0].id)||'';
+    modelInput.placeholder='Model name';
+    body.appendChild(_providerField('Name',nameInput));
+    body.appendChild(_providerField('Base URL',urlInput));
+    body.appendChild(_providerField('Model',modelInput));
+  }
+
   const field=document.createElement('div');
   field.className='provider-card-field';
   const label=document.createElement('label');
@@ -4956,12 +5038,19 @@ function _buildProviderCard(p){
   saveBtn.type='button';
   saveBtn.className='provider-card-btn provider-card-btn-primary';
   saveBtn.textContent=t('providers_save');
-  saveBtn.onclick=()=>_saveProviderKey(p.id);
-  saveBtn.disabled=true;
+  saveBtn.onclick=()=>isCustom?_saveCustomProvider(p.id):_saveProviderKey(p.id);
+  saveBtn.disabled=!isCustom;
   row.appendChild(input);
   row.appendChild(toggleBtn);
   row.appendChild(saveBtn);
-  if(p.has_key){
+  if(isCustom && removable){
+    const removeBtn=document.createElement('button');
+    removeBtn.type='button';
+    removeBtn.className='provider-card-btn provider-card-btn-danger';
+    removeBtn.textContent=t('providers_remove');
+    removeBtn.onclick=()=>_removeCustomProvider(customName);
+    row.appendChild(removeBtn);
+  }else if(p.has_key){
     const removeBtn=document.createElement('button');
     removeBtn.type='button';
     removeBtn.className='provider-card-btn provider-card-btn-danger';
@@ -4972,7 +5061,6 @@ function _buildProviderCard(p){
   field.appendChild(row);
   body.appendChild(field);
 
-  // Model list — show when provider has known models
   if(modelCount>0){
     const modelSection=document.createElement('div');
     modelSection.className='provider-card-models';
@@ -4989,12 +5077,6 @@ function _buildProviderCard(p){
       tag.textContent=m.id||m.label||m;
       modelList.appendChild(tag);
     }
-    // When the rendered list is a strict subset of the total catalog (Nous
-    // Portal large-tier accounts hit this with ~400-model catalogs), show
-    // a "+N more" trailing pill so the user knows the picker is intentionally
-    // capped — and they can still reach the full catalog via the /model
-    // slash command (its autocomplete consumes the un-trimmed list from
-    // /api/models's extra_models field). #1567.
     const totalCount=Number.isFinite(p.models_total)?p.models_total:renderedModels.length;
     const hiddenCount=Math.max(0, totalCount - renderedModels.length);
     if(hiddenCount>0){
@@ -5008,7 +5090,6 @@ function _buildProviderCard(p){
     body.appendChild(modelSection);
   }
 
-  // Refresh models for this provider
   const refreshRow=document.createElement('div');
   refreshRow.className='provider-card-row';
   refreshRow.style.marginTop='6px';
@@ -5024,13 +5105,22 @@ function _buildProviderCard(p){
   body.appendChild(refreshRow);
   card.appendChild(body);
 
-  _providerCardEls.set(p.id,{card,input,saveBtn,hasKey:p.has_key});
-  input.addEventListener('input',()=>{saveBtn.disabled=!input.value.trim();});
+  _providerCardEls.set(p.id,{card,input,saveBtn,hasKey:p.has_key,nameInput,urlInput,modelInput,isCustom,displayName:customName});
+  const updateSaveState=()=>{
+    if(isCustom){
+      const hasRequired = !!(urlInput&&urlInput.value.trim()) && !!(modelInput&&modelInput.value.trim()) && !!input.value.trim();
+      saveBtn.disabled=!hasRequired;
+    }else{
+      saveBtn.disabled=!input.value.trim();
+    }
+  };
+  input.addEventListener('input',updateSaveState);
+  if(urlInput) urlInput.addEventListener('input',updateSaveState);
+  if(modelInput) modelInput.addEventListener('input',updateSaveState);
   header.addEventListener('click',e=>{
-    // Don't toggle when clicking inside body (defensive; body isn't inside header)
     if(e.target.closest('.provider-card-body')) return;
     card.classList.toggle('open');
-    if(card.classList.contains('open')) setTimeout(()=>input.focus(),0);
+    if(card.classList.contains('open')) setTimeout(()=>((urlInput||input)?.focus()),0);
   });
   return card;
 }
@@ -5050,12 +5140,8 @@ async function _saveProviderKey(providerId){
     if(res.ok){
       showToast(res.provider+' key '+res.action);
       els.input.value='';
-      // Invalidate every dropdown surface that caches /api/models so the
-      // newly-configured provider's models show up without a server restart
-      // or page reload (#1539). Server-side invalidate_models_cache() is
-      // already called by api/providers.py:set_provider_key.
       _refreshModelDropdownsAfterProviderChange();
-      await loadProvidersPanel(); // refresh list
+      await loadProvidersPanel();
     }else{
       showToast(res.error||'Failed to save key');
       els.saveBtn.disabled=false;
@@ -5068,6 +5154,37 @@ async function _saveProviderKey(providerId){
   }
 }
 
+async function _saveCustomProvider(providerId){
+  const els=_providerCardEls.get(providerId);
+  if(!els) return;
+  const name=(els.displayName||els.nameInput?.value||'').trim();
+  const base_url=(els.urlInput?.value||'').trim();
+  const model=(els.modelInput?.value||'').trim();
+  const api_key=(els.input?.value||'').trim();
+  if(!name || !base_url || !model || !api_key){
+    showToast('Name, Base URL, API key, and model are required');
+    return;
+  }
+  els.saveBtn.disabled=true;
+  els.saveBtn.textContent=t('providers_saving');
+  try{
+    const res=await api('/api/providers/custom',{method:'POST',body:JSON.stringify({name,base_url,api_key,model})});
+    if(res.ok){
+      showToast((res.display_name||name)+' '+(res.action||'saved'));
+      _refreshModelDropdownsAfterProviderChange();
+      await loadProvidersPanel();
+    }else{
+      showToast(res.error||'Failed to save provider');
+      els.saveBtn.disabled=false;
+      els.saveBtn.textContent=providerId==='__new_custom_provider__'?'Add Provider':t('providers_save');
+    }
+  }catch(e){
+    showToast('Error: '+e.message);
+    els.saveBtn.disabled=false;
+    els.saveBtn.textContent=providerId==='__new_custom_provider__'?'Add Provider':t('providers_save');
+  }
+}
+
 async function _removeProviderKey(providerId){
   const els=_providerCardEls.get(providerId);
   if(!els) return;
@@ -5076,13 +5193,8 @@ async function _removeProviderKey(providerId){
     const res=await api('/api/providers/delete',{method:'POST',body:JSON.stringify({provider:providerId})});
     if(res.ok){
       showToast(res.provider+' key '+t('providers_key_removed').toLowerCase());
-      // Drop the removed provider from every cached dropdown surface so it
-      // disappears immediately — composer picker, /model slash command,
-      // Settings → Default Model, configured-model badges (#1539).
-      // Without this, a stale list from before the delete keeps offering
-      // the now-removed provider's models until the page is reloaded.
       _refreshModelDropdownsAfterProviderChange();
-      await loadProvidersPanel(); // refresh list
+      await loadProvidersPanel();
     }else{
       showToast(res.error||'Failed to remove key');
       if(els.saveBtn){els.saveBtn.disabled=false;els.saveBtn.textContent=t('providers_save');}
@@ -5090,6 +5202,22 @@ async function _removeProviderKey(providerId){
   }catch(e){
     showToast('Error: '+e.message);
     if(els.saveBtn){els.saveBtn.disabled=false;els.saveBtn.textContent=t('providers_save');}
+  }
+}
+
+async function _removeCustomProvider(name){
+  if(!name) return;
+  try{
+    const res=await api('/api/providers/custom/delete',{method:'POST',body:JSON.stringify({name})});
+    if(res.ok){
+      showToast((res.display_name||name)+' removed');
+      _refreshModelDropdownsAfterProviderChange();
+      await loadProvidersPanel();
+    }else{
+      showToast(res.error||'Failed to remove provider');
+    }
+  }catch(e){
+    showToast('Error: '+e.message);
   }
 }
 

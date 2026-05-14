@@ -2159,7 +2159,7 @@ def _read_visible_codex_cache_model_ids() -> list[str]:
 
 
 def _offline_filter_models(result: dict) -> dict:
-    """离线版硬收敛：确保返回给前端的 models 只含 yice provider 的模型。
+    """离线版：确保返回给前端的 models 只含 yice 及用户自行添加的 custom:* provider 的模型。
 
     不再锁定单一模型，允许从 endpoint 动态刷新模型列表。
 
@@ -2169,9 +2169,18 @@ def _offline_filter_models(result: dict) -> dict:
       - _build_available_models_uncached() filter near line ~3256 in this file (point 2/3)
       - get_providers() in api/providers.py _OFFLINE_VISIBLE_PROVIDERS (point 3/3)
     """
-    _ALLOWED_PROVIDERS = {"yice", "custom:yice"}
+    _YICE_PROVIDERS = {"yice", "custom:yice"}
     _DEFAULT_MODEL = "Qwen3.5-397B-A17B"
-    filtered = [g for g in (result.get("groups") or []) if (g.get("provider_id") or "").lower() in _ALLOWED_PROVIDERS]
+    all_groups = result.get("groups") or []
+    # Keep yice/custom:yice groups AND any user-added custom:* groups
+    filtered = [
+        g for g in all_groups
+        if (g.get("provider_id") or "").lower() in _YICE_PROVIDERS
+        or (
+            (g.get("provider_id") or "").lower().startswith("custom:")
+            and (g.get("provider_id") or "").lower() not in _YICE_PROVIDERS
+        )
+    ]
     # Normalize provider_id to yice for display
     for g in filtered:
         if (g.get("provider_id") or "").lower() == "custom:yice":
@@ -2179,8 +2188,14 @@ def _offline_filter_models(result: dict) -> dict:
             g["provider"] = "yice"
     if not filtered:
         filtered = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _DEFAULT_MODEL, "label": _DEFAULT_MODEL}]}]
+    visible_provider_ids = {str(g.get("provider_id") or "").lower() for g in filtered}
+    active_provider = str(result.get("active_provider") or "").strip().lower()
+    if active_provider == "custom:yice":
+        active_provider = "yice"
+    elif active_provider not in visible_provider_ids:
+        active_provider = "yice"
     return {
-        "active_provider": "yice",
+        "active_provider": active_provider,
         "default_model": result.get("default_model") or _DEFAULT_MODEL,
         "configured_model_badges": result.get("configured_model_badges", {}),
         "groups": filtered,
@@ -3259,16 +3274,34 @@ def get_available_models() -> dict:
             or (g.get("provider_id") or "").startswith("custom:")
         ]
 
-        # 离线版硬收敛：只向前端暴露 yice provider 及其唯一模型
+        # 离线版：只向前端暴露 yice provider 及用户自行添加的 custom:* providers
         # ── MODEL VISIBILITY CONTROL POINT 2/3 ──
-        # Change _OFFLINE_ONLY_PROVIDER / _OFFLINE_ONLY_MODEL to expose different models.
         _OFFLINE_ONLY_PROVIDER = "yice"
         _OFFLINE_ONLY_MODEL = "Qwen3.5-397B-A17B"
-        groups = [g for g in groups if (g.get("provider_id") or "").lower() == _OFFLINE_ONLY_PROVIDER]
+        _YICE_IDS = {_OFFLINE_ONLY_PROVIDER, "custom:yice"}
+        groups = [
+            g for g in groups
+            if (g.get("provider_id") or "").lower() in _YICE_IDS
+            or (
+                (g.get("provider_id") or "").lower().startswith("custom:")
+                and (g.get("provider_id") or "").lower() not in _YICE_IDS
+            )
+        ]
         if not groups:
             groups = [{"provider": "yice", "provider_id": "yice", "models": [{"id": _OFFLINE_ONLY_MODEL, "label": _OFFLINE_ONLY_MODEL}]}]
-        active_provider = _OFFLINE_ONLY_PROVIDER
-        default_model = _OFFLINE_ONLY_MODEL
+        visible_provider_ids = {str(g.get("provider_id") or "").lower() for g in groups}
+        requested_active_provider = str(active_provider or "").strip().lower()
+        configured_model_cfg = cfg.get("model", {}) if isinstance(cfg.get("model", {}), dict) else {}
+        configured_model_name = str(configured_model_cfg.get("model") or "").strip()
+        if requested_active_provider not in visible_provider_ids:
+            active_provider = _OFFLINE_ONLY_PROVIDER
+            if not default_model:
+                default_model = _OFFLINE_ONLY_MODEL
+        else:
+            active_provider = requested_active_provider
+            if configured_model_name:
+                default_model = configured_model_name
+        default_model = default_model or _OFFLINE_ONLY_MODEL
 
         return {
             "active_provider": active_provider,

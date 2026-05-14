@@ -1722,7 +1722,7 @@ from api.streaming import (
     cancel_stream,
     _materialize_pending_user_turn_before_error,
 )
-from api.providers import get_providers, get_provider_quota, set_provider_key, remove_provider_key
+from api.providers import get_providers, get_provider_quota, set_provider_key, remove_provider_key, add_custom_provider, remove_custom_provider
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -3859,11 +3859,31 @@ def handle_post(handler, parsed) -> bool:
             return bad(handler, result.get("error", "Unknown error"))
         return j(handler, result)
 
+    if parsed.path == "/api/providers/custom":
+        result = add_custom_provider(
+            str(body.get("name") or ""),
+            str(body.get("base_url") or ""),
+            str(body.get("api_key") or ""),
+            str(body.get("model") or ""),
+        )
+        if not result.get("ok"):
+            return bad(handler, result.get("error", "Unknown error"))
+        return j(handler, result)
+
     if parsed.path == "/api/providers/delete":
         provider_id = (body.get("provider") or "").strip().lower()
         if not provider_id:
             return bad(handler, "provider is required")
         result = remove_provider_key(provider_id)
+        if not result.get("ok"):
+            return bad(handler, result.get("error", "Unknown error"))
+        return j(handler, result)
+
+    if parsed.path == "/api/providers/custom/delete":
+        provider_name = str(body.get("name") or "").strip()
+        if not provider_name:
+            return bad(handler, "name is required")
+        result = remove_custom_provider(provider_name)
         if not result.get("ok"):
             return bad(handler, result.get("error", "Unknown error"))
         return j(handler, result)

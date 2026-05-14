@@ -902,27 +902,30 @@ def get_providers() -> dict[str, Any]:
             if not isinstance(cp, dict) or not cp.get("name"):
                 continue
             cp_name = str(cp["name"]).strip()
-            cp_id = f"custom:{cp_name}"
+            cp_slug = cp_name.lower().replace(" ", "-")
+            cp_id = f"custom:{cp_slug}"
             # Collect models from `models` list or `model` single
             cp_models = []
             if isinstance(cp.get("models"), list):
                 cp_models = [{"id": str(m), "label": str(m)} for m in cp["models"]]
             elif cp.get("model"):
-                cp_models = [{"id": cp["model"], "label": cp["model"]}]
-            # Check for env var reference (${VAR_NAME} pattern)
-            cp_api_key = str(cp.get("api_key") or "")
-            cp_has_key = bool(cp_api_key.strip())
-            # Replace env var reference to check actual value
-            if cp_api_key.startswith("${") and cp_api_key.endswith("}"):
-                env_var = cp_api_key[2:-1]
-                cp_has_key = bool(os.getenv(env_var, "").strip())
+                cp_models = [{"id": str(cp["model"]), "label": str(cp["model"])}]
+            # Check for env var/key_env/api_key
+            cp_key_env = str(cp.get("key_env") or "").strip()
+            cp_api_key = str(cp.get("api_key") or "").strip()
+            cp_has_key = bool(cp_api_key or (cp_key_env and os.getenv(cp_key_env, "").strip()))
             providers.append({
                 "id": cp_id,
                 "display_name": cp_name,
                 "has_key": cp_has_key,
-                "configurable": False,  # custom providers managed via config.yaml
+                "configurable": True,
+                "is_oauth": False,
+                "is_custom": True,
+                "removable": cp_slug != "yice",
                 "key_source": "config_yaml" if cp_has_key else "none",
                 "models": cp_models,
+                "models_total": len(cp_models),
+                "base_url": str(cp.get("base_url") or "").strip(),
             })
 
     # Determine active provider
@@ -931,14 +934,23 @@ def get_providers() -> dict[str, Any]:
     if isinstance(model_cfg, dict):
         active_provider = model_cfg.get("provider")
 
-    # 离线版硬收敛：只向前端暴露 yice provider
+    # 离线版：向前端暴露 yice provider 以及用户自行添加的 custom:* providers
     # custom:yice 是运行时实际使用的 provider id，映射回 yice 展示
     # ── MODEL VISIBILITY CONTROL POINT 3/3 ──
     # To expose additional providers, add their ids to this frozenset.
     # See also: api/config.py _offline_filter_models() (1/3) and
     #           api/config.py _build_available_models_uncached() (2/3).
+    # User-added custom providers (custom:* except custom:yice) are always visible.
     _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice", "custom:yice"})
-    providers = [p for p in providers if p["id"] in _OFFLINE_VISIBLE_PROVIDERS]
+    providers = [
+        p for p in providers
+        if p["id"] in _OFFLINE_VISIBLE_PROVIDERS
+        or (p["id"].startswith("custom:") and p["id"] not in {"custom:yice"})
+    ]
+    # Mark user-added custom providers (not yice) as configurable so the UI shows them
+    for p in providers:
+        if p["id"].startswith("custom:") and p["id"] != "custom:yice":
+            p["configurable"] = True
     # Merge custom:yice into yice display entry
     yice_entry = None
     custom_yice_entry = None
@@ -961,9 +973,11 @@ def get_providers() -> dict[str, Any]:
         custom_yice_entry["display_name"] = "yice"
         providers = [custom_yice_entry]
 
-    if active_provider not in {"yice", "custom:yice"}:
+    visible_provider_ids = {str(p.get("id") or "").lower() for p in providers}
+    active_provider = str(active_provider or "").strip().lower()
+    if active_provider == "custom:yice":
         active_provider = "yice"
-    else:
+    elif active_provider not in visible_provider_ids:
         active_provider = "yice"
 
     return {
@@ -1167,3 +1181,150 @@ def _clean_provider_key_from_config(provider_id: str) -> None:
             reload_config()
     except Exception:
         logger.exception("Failed to clean provider key from config.yaml for %s", provider_id)
+
+
+def add_custom_provider(name: str, base_url: str, api_key: str, model: str = "") -> dict[str, Any]:
+    """Add or update a user-defined OpenAI-compatible custom provider.
+
+    Writes the entry to config.yaml ``custom_providers`` and the API key to
+    ``~/.hermes/.env`` under a generated env var name.
+
+    Returns a status dict.
+    """
+    import re as _re
+
+    name = name.strip()
+    base_url = base_url.strip().rstrip("/")
+    api_key = api_key.strip()
+    model = model.strip()
+
+    if not name:
+        return {"ok": False, "error": "Provider name is required."}
+    if not _re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$', name):
+        return {"ok": False, "error": "Provider name must be alphanumeric (hyphens/underscores allowed), max 63 chars."}
+    if name.lower() == "yice":
+        return {"ok": False, "error": "Cannot override the built-in yice provider here. Use the yice settings card."}
+    if not base_url:
+        return {"ok": False, "error": "Base URL is required."}
+    if not base_url.startswith("http://") and not base_url.startswith("https://"):
+        return {"ok": False, "error": "Base URL must start with http:// or https://."}
+    if not api_key:
+        return {"ok": False, "error": "API key is required."}
+    if len(api_key) < 4:
+        return {"ok": False, "error": "API key appears too short."}
+
+    # Derive a stable env var name from the provider name
+    env_var = "CUSTOM_" + _re.sub(r'[^A-Z0-9]', '_', name.upper()) + "_API_KEY"
+
+    try:
+        import api.config as _config
+        config_path = _config._get_config_path()
+        cfg = get_config()
+
+        custom_providers = cfg.get("custom_providers", [])
+        if not isinstance(custom_providers, list):
+            custom_providers = []
+
+        # Update existing entry or append new one
+        found = False
+        for cp in custom_providers:
+            if isinstance(cp, dict) and str(cp.get("name", "")).strip().lower() == name.lower():
+                cp["base_url"] = base_url
+                cp["key_env"] = env_var
+                if model:
+                    cp["model"] = model
+                elif "model" in cp and not model:
+                    pass  # keep existing model
+                found = True
+                break
+        if not found:
+            entry: dict[str, Any] = {"name": name, "base_url": base_url, "key_env": env_var}
+            if model:
+                entry["model"] = model
+            custom_providers.append(entry)
+
+        cfg["custom_providers"] = custom_providers
+        _save_yaml_config_file(config_path, cfg)
+    except Exception as exc:
+        logger.exception("Failed to update config.yaml for custom provider %s", name)
+        return {"ok": False, "error": f"Failed to save provider config: {exc}"}
+
+    # Write API key to .env
+    env_path = _get_hermes_home() / ".env"
+    try:
+        _write_env_file(env_path, {env_var: api_key})
+    except Exception as exc:
+        return {"ok": False, "error": f"Failed to save API key: {exc}"}
+
+    # Sync env into current process so the next request can use it immediately
+    os.environ[env_var] = api_key
+
+    invalidate_models_cache()
+    reload_config()
+
+    return {
+        "ok": True,
+        "provider": f"custom:{name}",
+        "display_name": name,
+        "action": "added" if not found else "updated",
+    }
+
+
+def remove_custom_provider(name: str) -> dict[str, Any]:
+    """Remove a user-defined custom provider by name.
+
+    Removes the entry from config.yaml ``custom_providers`` and the API key
+    from ``~/.hermes/.env``.
+
+    Returns a status dict.
+    """
+    name = name.strip()
+    if not name:
+        return {"ok": False, "error": "Provider name is required."}
+    if name.lower() == "yice":
+        return {"ok": False, "error": "Cannot remove the built-in yice provider."}
+
+    import re as _re
+    env_var = "CUSTOM_" + _re.sub(r'[^A-Z0-9]', '_', name.upper()) + "_API_KEY"
+
+    try:
+        import api.config as _config
+        config_path = _config._get_config_path()
+        cfg = get_config()
+
+        custom_providers = cfg.get("custom_providers", [])
+        if not isinstance(custom_providers, list):
+            custom_providers = []
+
+        original_len = len(custom_providers)
+        custom_providers = [
+            cp for cp in custom_providers
+            if not (isinstance(cp, dict) and str(cp.get("name", "")).strip().lower() == name.lower())
+        ]
+        if len(custom_providers) == original_len:
+            return {"ok": False, "error": f"Provider '{name}' not found."}
+
+        cfg["custom_providers"] = custom_providers
+        _save_yaml_config_file(config_path, cfg)
+    except Exception as exc:
+        logger.exception("Failed to update config.yaml when removing custom provider %s", name)
+        return {"ok": False, "error": f"Failed to remove provider config: {exc}"}
+
+    # Remove API key from .env
+    env_path = _get_hermes_home() / ".env"
+    try:
+        _write_env_file(env_path, {env_var: None})
+    except Exception:
+        pass  # best-effort
+
+    os.environ.pop(env_var, None)
+
+    invalidate_models_cache()
+    reload_config()
+
+    return {
+        "ok": True,
+        "provider": f"custom:{name}",
+        "display_name": name,
+        "action": "removed",
+    }
