@@ -4898,10 +4898,6 @@ function _buildCustomProviderCreateCard(){
   `;
   const body=document.createElement('div');
   body.className='provider-card-body';
-  const hint=document.createElement('div');
-  hint.className='provider-card-hint';
-  hint.textContent='Example base URL: http://10.8.4.23:36435/v1';
-  body.appendChild(hint);
   const nameInput=document.createElement('input');
   nameInput.className='provider-card-input';
   nameInput.placeholder='Provider name';
