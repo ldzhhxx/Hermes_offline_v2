@@ -4762,24 +4762,124 @@ async function loadProvidersPanel(){
   try{
     const data=await api('/api/providers');
     const quota=await api('/api/provider/quota').catch(e=>({ok:false,status:'unavailable',quota:null,message:e.message||'Quota status unavailable'}));
-    const providers=(data.providers||[]).filter(p=>p.configurable||p.is_oauth);
+    const providers=(data.providers||[]).filter(p=>p.configurable||p.is_oauth||p.is_custom);
     list.innerHTML='';
     _providerCardEls.clear();
     const quotaCard=_buildProviderQuotaCard(quota);
     if(quotaCard) list.appendChild(quotaCard);
-    if(providers.length===0){
+    if(providers.length===0 && !document.getElementById('customGatewayForm')){
       list.style.display='none';
       if(empty) empty.style.display='';
-      return;
+    } else {
+      if(empty) empty.style.display='none';
+      list.style.display='';
     }
-    if(empty) empty.style.display='none';
-    list.style.display='';
     for(const p of providers){
-      list.appendChild(_buildProviderCard(p));
+      if(p.is_custom && p.configurable){
+        list.appendChild(_buildCustomProviderCard(p));
+      } else {
+        list.appendChild(_buildProviderCard(p));
+      }
     }
+    // Append "Add Custom Gateway" form at the end
+    list.appendChild(_buildAddCustomGatewayForm());
   }catch(e){
     list.innerHTML='<div style="color:var(--error);padding:12px;font-size:13px">Failed to load providers: '+e.message+'</div>';
   }
+}
+
+function _buildCustomProviderCard(p){
+  const card=document.createElement('div');
+  card.className='provider-card';
+  card.dataset.provider=p.id;
+  const models=(p.models||[]).map(m=>m.label||m.id).join(', ')||'No models';
+  card.innerHTML=`
+    <div class="provider-card-header">
+      <div class="provider-card-info">
+        <div class="provider-card-name">${esc(p.display_name)}</div>
+        <div class="provider-card-meta">${esc(p.base_url||'')}</div>
+      </div>
+      <span class="provider-card-badge">${p.has_key?'Configured':'No Key'}</span>
+    </div>
+    <div class="provider-card-body" style="display:block;padding:10px 16px">
+      <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">Models: ${esc(models)}</div>
+      <button class="provider-card-btn provider-card-btn-danger" style="margin-top:4px">Delete</button>
+    </div>
+  `;
+  card.querySelector('.provider-card-btn-danger').addEventListener('click',async()=>{
+    if(!confirm('确定删除自定义网关 "'+p.display_name+'" ？')) return;
+    try{
+      await api('/api/providers/custom/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:p.display_name})});
+      await loadProvidersPanel();
+    }catch(e){alert('删除失败: '+e.message);}
+  });
+  // Click header to toggle body
+  card.querySelector('.provider-card-header').addEventListener('click',(ev)=>{
+    if(ev.target.closest('.provider-card-body')) return;
+    const body=card.querySelector('.provider-card-body');
+    body.style.display=body.style.display==='none'?'block':'none';
+  });
+  card.querySelector('.provider-card-body').style.display='none';
+  return card;
+}
+
+function _buildAddCustomGatewayForm(){
+  const wrapper=document.createElement('div');
+  wrapper.className='provider-card';
+  wrapper.style.border='1px dashed var(--border)';
+  wrapper.innerHTML=`
+    <div class="provider-card-header" style="cursor:pointer">
+      <div class="provider-card-info">
+        <div class="provider-card-name">+ 添加自定义网关</div>
+        <div class="provider-card-meta">添加您自己的 OpenAI 兼容 API 网关</div>
+      </div>
+    </div>
+    <div class="provider-card-body" id="customGatewayFormBody" style="display:none;padding:12px 16px">
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div>
+          <label style="font-size:12px;font-weight:500;display:block;margin-bottom:4px">名称 *</label>
+          <input type="text" id="cgName" placeholder="例如: my-gateway" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-secondary)">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:500;display:block;margin-bottom:4px">Base URL *</label>
+          <input type="text" id="cgBaseUrl" placeholder="https://api.example.com/v1" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-secondary)">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:500;display:block;margin-bottom:4px">API Key</label>
+          <input type="password" id="cgApiKey" placeholder="sk-..." style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-secondary)">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:500;display:block;margin-bottom:4px">模型（逗号分隔）</label>
+          <input type="text" id="cgModels" placeholder="gpt-4o, claude-3" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--bg-secondary)">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px">
+          <button id="cgSaveBtn" class="provider-card-btn provider-card-btn-primary">保存</button>
+          <button id="cgCancelBtn" class="provider-card-btn provider-card-btn-ghost">取消</button>
+        </div>
+        <div id="cgError" style="color:var(--error);font-size:12px;display:none"></div>
+      </div>
+    </div>
+  `;
+  const header=wrapper.querySelector('.provider-card-header');
+  const body=wrapper.querySelector('#customGatewayFormBody');
+  header.addEventListener('click',()=>{body.style.display=body.style.display==='none'?'block':'none';});
+  wrapper.querySelector('#cgCancelBtn').addEventListener('click',()=>{body.style.display='none';});
+  wrapper.querySelector('#cgSaveBtn').addEventListener('click',async()=>{
+    const errEl=wrapper.querySelector('#cgError');
+    errEl.style.display='none';
+    const name=(wrapper.querySelector('#cgName').value||'').trim();
+    const base_url=(wrapper.querySelector('#cgBaseUrl').value||'').trim();
+    const api_key=(wrapper.querySelector('#cgApiKey').value||'').trim();
+    const models=(wrapper.querySelector('#cgModels').value||'').trim();
+    if(!name){errEl.textContent='名称不能为空';errEl.style.display='';return;}
+    if(!base_url){errEl.textContent='Base URL 不能为空';errEl.style.display='';return;}
+    try{
+      const res=await api('/api/providers/custom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,base_url,api_key:api_key||null,models:models?models.split(',').map(s=>s.trim()).filter(Boolean):[]})});
+      if(!res.ok){errEl.textContent=res.error||'保存失败';errEl.style.display='';return;}
+      await loadProvidersPanel();
+    }catch(e){errEl.textContent=e.message||'请求失败';errEl.style.display='';}
+  });
+  return wrapper;
 }
 
 function _formatProviderQuotaMoney(value){

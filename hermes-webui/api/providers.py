@@ -916,11 +916,15 @@ def get_providers() -> dict[str, Any]:
             if cp_api_key.startswith("${") and cp_api_key.endswith("}"):
                 env_var = cp_api_key[2:-1]
                 cp_has_key = bool(os.getenv(env_var, "").strip())
+            # user-added custom providers (have base_url set) are configurable from the WebUI
+            is_user_added = bool(str(cp.get("base_url") or "").strip()) and cp_name.lower() != "yice"
             providers.append({
                 "id": cp_id,
                 "display_name": cp_name,
                 "has_key": cp_has_key,
-                "configurable": False,  # custom providers managed via config.yaml
+                "configurable": is_user_added,
+                "is_custom": True,
+                "base_url": str(cp.get("base_url") or "").strip(),
                 "key_source": "config_yaml" if cp_has_key else "none",
                 "models": cp_models,
             })
@@ -931,14 +935,18 @@ def get_providers() -> dict[str, Any]:
     if isinstance(model_cfg, dict):
         active_provider = model_cfg.get("provider")
 
-    # 离线版硬收敛：只向前端暴露 yice provider
+    # 离线版硬收敛：只向前端暴露 yice provider 及用户自行添加的自定义 provider
     # custom:yice 是运行时实际使用的 provider id，映射回 yice 展示
     # ── MODEL VISIBILITY CONTROL POINT 3/3 ──
     # To expose additional providers, add their ids to this frozenset.
     # See also: api/config.py _offline_filter_models() (1/3) and
     #           api/config.py _build_available_models_uncached() (2/3).
     _OFFLINE_VISIBLE_PROVIDERS = frozenset({"yice", "custom:yice"})
-    providers = [p for p in providers if p["id"] in _OFFLINE_VISIBLE_PROVIDERS]
+    # Keep yice + user-added custom providers (is_custom=True and configurable=True)
+    providers = [
+        p for p in providers
+        if p["id"] in _OFFLINE_VISIBLE_PROVIDERS or (p.get("is_custom") and p.get("configurable"))
+    ]
     # Merge custom:yice into yice display entry
     yice_entry = None
     custom_yice_entry = None
@@ -1167,3 +1175,128 @@ def _clean_provider_key_from_config(provider_id: str) -> None:
             reload_config()
     except Exception:
         logger.exception("Failed to clean provider key from config.yaml for %s", provider_id)
+
+
+
+# ── User-added custom gateways ────────────────────────────────────────────────
+
+def add_custom_provider(
+    name: str,
+    base_url: str,
+    api_key: str | None,
+    models: list[str],
+) -> dict[str, Any]:
+    """Add (or update) a user-defined custom gateway entry in config.yaml.
+
+    Writes the API key directly into the config.yaml entry (not .env) so the
+    entry is self-contained and portable per-container.
+
+    Returns a status dict with the operation result.
+    """
+    name = (name or "").strip()
+    base_url = (base_url or "").strip()
+
+    if not name:
+        return {"ok": False, "error": "名称不能为空。"}
+    if not base_url:
+        return {"ok": False, "error": "Base URL 不能为空。"}
+    if not base_url.startswith(("http://", "https://")):
+        return {"ok": False, "error": "Base URL 必须以 http:// 或 https:// 开头。"}
+    if "\n" in name or "\r" in name or len(name) > 64:
+        return {"ok": False, "error": "名称格式不合法（最多64字符，不含换行）。"}
+    # Prevent overwriting the reserved yice entry
+    if name.strip().lower() == "yice":
+        return {"ok": False, "error": "名称 'yice' 为系统保留，请使用其他名称。"}
+    if api_key:
+        api_key = api_key.strip()
+        if "\n" in api_key or "\r" in api_key:
+            return {"ok": False, "error": "API Key 不能包含换行符。"}
+
+    try:
+        import api.config as _config
+        config_path = Path(_config._get_config_path())
+        cfg = _config._load_yaml_config_file(config_path)
+        custom_providers = cfg.get("custom_providers", [])
+        if not isinstance(custom_providers, list):
+            custom_providers = []
+
+        # Build clean model list
+        clean_models = [str(m).strip() for m in (models or []) if str(m).strip()]
+
+        # Update existing entry or append new one
+        found = False
+        for cp in custom_providers:
+            if not isinstance(cp, dict):
+                continue
+            if str(cp.get("name") or "").strip().lower() == name.lower():
+                cp["base_url"] = base_url
+                if api_key:
+                    cp["api_key"] = api_key
+                elif "api_key" in cp:
+                    del cp["api_key"]
+                if clean_models:
+                    cp["models"] = clean_models
+                found = True
+                break
+
+        if not found:
+            entry: dict[str, Any] = {"name": name, "base_url": base_url}
+            if api_key:
+                entry["api_key"] = api_key
+            if clean_models:
+                entry["models"] = clean_models
+            custom_providers.append(entry)
+
+        cfg["custom_providers"] = custom_providers
+        _config._save_yaml_config_file(config_path, cfg)
+        reload_config()
+        invalidate_models_cache()
+    except Exception as exc:
+        logger.exception("Failed to add custom provider %s", name)
+        return {"ok": False, "error": f"保存失败：{exc}"}
+
+    return {
+        "ok": True,
+        "provider": f"custom:{name.lower().replace(' ', '-')}",
+        "display_name": name,
+        "action": "updated" if found else "added",
+    }
+
+
+def remove_custom_provider(name: str) -> dict[str, Any]:
+    """Remove a user-defined custom gateway entry from config.yaml.
+
+    Refuses to remove the reserved 'yice' entry.
+
+    Returns a status dict with the operation result.
+    """
+    name = (name or "").strip()
+    if not name:
+        return {"ok": False, "error": "名称不能为空。"}
+    if name.strip().lower() == "yice":
+        return {"ok": False, "error": "yice 网关为系统内置，不可删除。"}
+
+    try:
+        import api.config as _config
+        config_path = Path(_config._get_config_path())
+        cfg = _config._load_yaml_config_file(config_path)
+        custom_providers = cfg.get("custom_providers", [])
+        if not isinstance(custom_providers, list):
+            return {"ok": False, "error": "未找到该自定义网关。"}
+
+        new_list = [
+            cp for cp in custom_providers
+            if not (isinstance(cp, dict) and str(cp.get("name") or "").strip().lower() == name.lower())
+        ]
+        if len(new_list) == len(custom_providers):
+            return {"ok": False, "error": f"未找到名称为 '{name}' 的自定义网关。"}
+
+        cfg["custom_providers"] = new_list
+        _config._save_yaml_config_file(config_path, cfg)
+        reload_config()
+        invalidate_models_cache()
+    except Exception as exc:
+        logger.exception("Failed to remove custom provider %s", name)
+        return {"ok": False, "error": f"删除失败：{exc}"}
+
+    return {"ok": True, "name": name, "action": "removed"}

@@ -1722,7 +1722,7 @@ from api.streaming import (
     cancel_stream,
     _materialize_pending_user_turn_before_error,
 )
-from api.providers import get_providers, get_provider_quota, set_provider_key, remove_provider_key
+from api.providers import get_providers, get_provider_quota, set_provider_key, remove_provider_key, add_custom_provider, remove_custom_provider
 from api.onboarding import (
     apply_onboarding_setup,
     get_onboarding_status,
@@ -3864,6 +3864,28 @@ def handle_post(handler, parsed) -> bool:
         if not provider_id:
             return bad(handler, "provider is required")
         result = remove_provider_key(provider_id)
+        if not result.get("ok"):
+            return bad(handler, result.get("error", "Unknown error"))
+        return j(handler, result)
+
+    # ── Custom gateway management (user-added providers) ──
+    if parsed.path == "/api/providers/custom":
+        name = (body.get("name") or "").strip()
+        base_url = (body.get("base_url") or "").strip()
+        api_key = (body.get("api_key") or "").strip() or None
+        models = body.get("models") or []
+        if isinstance(models, str):
+            models = [m.strip() for m in models.split(",") if m.strip()]
+        result = add_custom_provider(name, base_url, api_key, models)
+        if not result.get("ok"):
+            return bad(handler, result.get("error", "Unknown error"))
+        return j(handler, result)
+
+    if parsed.path == "/api/providers/custom/delete":
+        name = (body.get("name") or "").strip()
+        if not name:
+            return bad(handler, "name is required")
+        result = remove_custom_provider(name)
         if not result.get("ok"):
             return bad(handler, result.get("error", "Unknown error"))
         return j(handler, result)
