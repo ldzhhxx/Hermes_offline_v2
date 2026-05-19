@@ -13,6 +13,7 @@ import collections
 import copy
 import json
 import logging
+import math
 import os
 import queue
 import sys
@@ -484,7 +485,12 @@ def verify_hermes_imports() -> tuple:
 
 # ── Limits ───────────────────────────────────────────────────────────────────
 MAX_FILE_BYTES = 200_000
-MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+MAX_UPLOAD_MB = max(1, int(os.getenv("HERMES_WEBUI_MAX_UPLOAD_MB", "500")))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+UPLOAD_TIMEOUT_SECONDS = max(
+    600,
+    math.ceil((MAX_UPLOAD_BYTES * 8) / (10 * 1024 * 1024) + 120),
+)
 
 # ── File type maps ───────────────────────────────────────────────────────────
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp"}

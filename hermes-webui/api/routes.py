@@ -765,6 +765,7 @@ from api.config import (
     MD_EXTS,
     MIME_MAP,
     MAX_FILE_BYTES,
+    MAX_UPLOAD_MB,
     MAX_UPLOAD_BYTES,
     CHAT_LOCK,
     _get_session_agent_lock,
@@ -2767,7 +2768,12 @@ def handle_get(handler, parsed) -> bool:
             version_token = quote(WEBUI_VERSION, safe="")
             from api.extensions import inject_extension_tags
 
-            html = _INDEX_HTML_PATH.read_text(encoding="utf-8").replace("__WEBUI_VERSION__", version_token)
+            html = (
+                _INDEX_HTML_PATH.read_text(encoding="utf-8")
+                .replace("__WEBUI_VERSION__", version_token)
+                .replace("__HERMES_MAX_UPLOAD_BYTES__", str(MAX_UPLOAD_BYTES))
+                .replace("__HERMES_MAX_UPLOAD_MB__", str(MAX_UPLOAD_MB))
+            )
             return t(
                 handler,
                 inject_extension_tags(html),

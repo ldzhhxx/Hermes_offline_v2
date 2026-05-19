@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UI_JS = ROOT / "static" / "ui.js"
 I18N_JS = ROOT / "static" / "i18n.js"
 CONFIG_PY = ROOT / "api" / "config.py"
+INDEX_HTML = ROOT / "static" / "index.html"
 
 
 def _function_body(src: str, name: str) -> str:
@@ -26,9 +27,11 @@ def test_upload_limit_constant_matches_server_limit():
     """The browser preflight limit must match api.config.MAX_UPLOAD_BYTES."""
     ui = UI_JS.read_text(encoding="utf-8")
     config = CONFIG_PY.read_text(encoding="utf-8")
+    index_html = INDEX_HTML.read_text(encoding="utf-8")
 
-    assert "const MAX_UPLOAD_BYTES=500*1024*1024;" in ui
-    assert "MAX_UPLOAD_BYTES = 500 * 1024 * 1024" in config
+    assert 'const MAX_UPLOAD_BYTES=Number(window.HERMES_MAX_UPLOAD_BYTES)||500*1024*1024;' in ui
+    assert 'MAX_UPLOAD_MB = max(1, int(os.getenv("HERMES_WEBUI_MAX_UPLOAD_MB", "500")))' in config
+    assert 'window.HERMES_MAX_UPLOAD_BYTES=__HERMES_MAX_UPLOAD_BYTES__;' in index_html
 
 
 def test_file_picker_rejects_oversize_files_before_queueing():
@@ -58,7 +61,7 @@ def test_pending_uploads_skip_fetch_for_oversize_files():
 
 
 def test_upload_too_large_has_user_facing_message():
-    """The status toast should explain the 500 MB limit instead of a network reset."""
+    """The status toast should explain the configured upload limit instead of a network reset."""
     i18n = I18N_JS.read_text(encoding="utf-8")
     ui = UI_JS.read_text(encoding="utf-8")
 

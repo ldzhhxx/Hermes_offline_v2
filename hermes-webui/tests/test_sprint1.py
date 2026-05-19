@@ -28,6 +28,7 @@ import pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent.parent))
 
 from tests._pytest_port import BASE
+from api.config import MAX_UPLOAD_BYTES
 
 
 # ──────────────────────────────────────────────
@@ -318,8 +319,8 @@ def test_upload_too_large(cleanup_test_sessions):
     """Uploading a file over MAX_UPLOAD_BYTES is rejected (413 or connection closed)."""
     sid, _ = make_session_tracked(cleanup_test_sessions)
 
-    # 501MB > 500MB limit
-    big = b"x" * (501 * 1024 * 1024)
+    # Allocate one byte over the configured limit so this test follows the env-controlled cap.
+    big = b"x" * (MAX_UPLOAD_BYTES + 1)
     try:
         result, status = post_multipart("/api/upload", {"session_id": sid}, {
             "file": ("big.bin", big)

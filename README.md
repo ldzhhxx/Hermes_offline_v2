@@ -202,6 +202,7 @@ docker run -d -p 18789:18789 -p 5000:5000 \
 | `HERMES_AGENT_PORT`    | `5000`      | Agent API 端口    |
 | `HERMES_WEBUI_HOST`    | `0.0.0.0`   | WebUI 绑定地址    |
 | `HERMES_WEBUI_PORT`    | `18789`     | WebUI 端口        |
+| `HERMES_WEBUI_MAX_UPLOAD_MB` | `500` | WebUI 上传上限（MB），前端/后端/超时会一并按此生效 |
 
 ### Agent API 兼容变量
 

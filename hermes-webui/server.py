@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 from api.auth import check_auth
-from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE
+from api.config import HOST, PORT, STATE_DIR, SESSION_DIR, DEFAULT_WORKSPACE, UPLOAD_TIMEOUT_SECONDS
 from api.helpers import j, get_profile_cookie
 from api.profiles import set_request_profile, clear_request_profile
 from api.routes import handle_delete, handle_get, handle_patch, handle_post
@@ -77,7 +77,7 @@ class QuietHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    timeout = 600  # seconds — large uploads (up to 500MB) need generous timeout
+    timeout = UPLOAD_TIMEOUT_SECONDS  # seconds — derived from HERMES_WEBUI_MAX_UPLOAD_MB
     
     def setup(self):
         """Set socket options for each accepted connection."""
