@@ -8,6 +8,9 @@ log() {
 shutdown() {
   local code=${1:-0}
   log "Shutting down services (exit code: ${code})..."
+  if [[ -n "${MINIO_SYNC_PID:-}" ]] && kill -0 "${MINIO_SYNC_PID}" 2>/dev/null; then
+    kill "${MINIO_SYNC_PID}" 2>/dev/null || true
+  fi
   if [[ -n "${AGENT_PID:-}" ]] && kill -0 "${AGENT_PID}" 2>/dev/null; then
     kill "${AGENT_PID}" 2>/dev/null || true
   fi
@@ -91,6 +94,16 @@ if [[ "$(id -u)" == "0" ]]; then
   chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
 fi
 
+# ── MinIO State Restore (before starting services) ──────────────────────────
+MINIO_ENABLED="${HERMES_MINIO_ENABLED:-false}"
+if [[ "${MINIO_ENABLED}" == "true" ]]; then
+  log "MinIO storage mode enabled. Attempting state restore..."
+  /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py restore || {
+    log "WARNING: MinIO restore failed or no backup found. Starting with current local state."
+  }
+fi
+# ────────────────────────────────────────────────────────────────────────────
+
 cd /opt/hermes-offline
 
 start_as_hermes() {
@@ -127,6 +140,16 @@ WEBUI_PID=$!
 log "Hermes WebUI PID: ${WEBUI_PID}"
 
 log "Startup complete. WebUI: http://localhost:${HERMES_WEBUI_PORT} ; Agent API: http://localhost:${API_SERVER_PORT}/health"
+
+# ── MinIO Periodic Sync Daemon ──────────────────────────────────────────────
+MINIO_SYNC_PID=""
+if [[ "${MINIO_ENABLED}" == "true" ]]; then
+  log "Starting MinIO periodic sync daemon (interval=${HERMES_MINIO_SYNC_INTERVAL:-300}s)..."
+  start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py daemon &
+  MINIO_SYNC_PID=$!
+  log "MinIO sync daemon PID: ${MINIO_SYNC_PID}"
+fi
+# ────────────────────────────────────────────────────────────────────────────
 
 set +e
 while true; do

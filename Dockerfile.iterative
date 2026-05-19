@@ -69,6 +69,7 @@ RUN set -eux; \
     if [ -n "$REINSTALL_DEPS" ]; then \
       /opt/hermes-offline/.venv/bin/pip install -e './hermes-agent[messaging,cli,pty]' \
       && /opt/hermes-offline/.venv/bin/pip install -r ./hermes-webui/requirements.txt \
+      && /opt/hermes-offline/.venv/bin/pip install 'minio>=7.2.0,<8' \
       && if [ -f ./hermes-agent/package-lock.json ]; then (cd ./hermes-agent && npm ci --omit=dev --ignore-scripts); else (cd ./hermes-agent && npm install --omit=dev --ignore-scripts); fi; \
     fi
 
