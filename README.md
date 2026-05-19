@@ -346,6 +346,67 @@ docker build -f Dockerfile.iterative \
 
 ---
 
+## ☁️ MinIO 状态同步（可选）
+
+适用于 k8s 一用户一容器场景：容器本地存储 + 启动时从 MinIO 恢复 + 运行时定期同步。
+
+### 启用方式
+
+设置 `HERMES_MINIO_ENABLED=true` 及相关环境变量：
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `HERMES_MINIO_ENABLED` | 是否启用 MinIO 同步模式 | `false` |
+| `HERMES_MINIO_ENDPOINT` | MinIO/S3 端点（如 `minio.internal:9000`） | — |
+| `HERMES_MINIO_ACCESS_KEY` | 访问密钥 | — |
+| `HERMES_MINIO_SECRET_KEY` | 秘密密钥 | — |
+| `HERMES_MINIO_BUCKET` | 存储桶名 | — |
+| `HERMES_MINIO_PREFIX` | 对象前缀（如 `user-liudezheng/diagent`） | `""` |
+| `HERMES_MINIO_SECURE` | 是否使用 HTTPS | `false` |
+| `HERMES_MINIO_SYNC_INTERVAL` | 同步间隔（秒） | `300` |
+
+### 启动行为
+
+| 模式 | 行为 |
+|------|------|
+| 临时存储（默认） | 与原有行为完全一致，不触发任何 MinIO 操作 |
+| MinIO 存储模式 | 启动时从 MinIO 恢复状态 → 正常启动服务 → 后台定期同步到 MinIO → 容器退出前执行最终同步 |
+
+### 同步范围
+
+**会同步的内容（非敏感用户状态）：**
+- `~/.hermes/skills/` — 用户技能
+- `~/.hermes/state.db`、`kanban.db`、`response_store.db` — SQLite 数据库（通过 backup API 安全备份）
+- `~/.hermes/sessions/`、`memories/`、`cron/`、`logs/`、`sandboxes/`、`platforms/`
+- `~/.hermes/SOUL.md`、`gateway_state.json`、`channel_directory.json`
+- `~/.hermes/webui/models_cache.json`、`webui/sessions/`
+- `/home/hermes/workspace/` — 工作区文件
+
+**不会同步的内容（敏感文件）：**
+- `~/.hermes/.env`、`auth.json`、`config.yaml`、`auth.lock`
+- `~/.hermes/webui/settings.json`、`webui/.sessions.json`
+- SQLite WAL/SHM/journal 文件
+- PID / lock 文件
+
+### 示例运行命令
+
+```bash
+docker run -d \
+  --name hermes-offline \
+  -p 18789:18789 -p 5000:5000 \
+  -e HERMES_LAUNCH_KEY=my-secret-2026 \
+  -e HERMES_MINIO_ENABLED=true \
+  -e HERMES_MINIO_ENDPOINT=minio.internal:9000 \
+  -e HERMES_MINIO_ACCESS_KEY=myaccesskey \
+  -e HERMES_MINIO_SECRET_KEY=mysecretkey \
+  -e HERMES_MINIO_BUCKET=hermes-state \
+  -e HERMES_MINIO_PREFIX=user-liudezheng/diagent \
+  -e HERMES_MINIO_SYNC_INTERVAL=300 \
+  hermes-offline:latest
+```
+
+---
+
 ## 🔒 模型可见性控制
 
 离线版默认只向前端暴露 `yice` provider。如需修改可见的 provider/模型列表，需同步修改以下三处（代码中已标注 `MODEL VISIBILITY CONTROL POINT`）：
