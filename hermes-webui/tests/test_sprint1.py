@@ -318,8 +318,8 @@ def test_upload_too_large(cleanup_test_sessions):
     """Uploading a file over MAX_UPLOAD_BYTES is rejected (413 or connection closed)."""
     sid, _ = make_session_tracked(cleanup_test_sessions)
 
-    # 21MB > 20MB limit
-    big = b"x" * (21 * 1024 * 1024)
+    # 501MB > 500MB limit
+    big = b"x" * (501 * 1024 * 1024)
     try:
         result, status = post_multipart("/api/upload", {"session_id": sid}, {
             "file": ("big.bin", big)

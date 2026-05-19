@@ -27,8 +27,8 @@ def test_upload_limit_constant_matches_server_limit():
     ui = UI_JS.read_text(encoding="utf-8")
     config = CONFIG_PY.read_text(encoding="utf-8")
 
-    assert "const MAX_UPLOAD_BYTES=20*1024*1024;" in ui
-    assert "MAX_UPLOAD_BYTES = 20 * 1024 * 1024" in config
+    assert "const MAX_UPLOAD_BYTES=500*1024*1024;" in ui
+    assert "MAX_UPLOAD_BYTES = 500 * 1024 * 1024" in config
 
 
 def test_file_picker_rejects_oversize_files_before_queueing():
@@ -58,7 +58,7 @@ def test_pending_uploads_skip_fetch_for_oversize_files():
 
 
 def test_upload_too_large_has_user_facing_message():
-    """The status toast should explain the 20 MB limit instead of a network reset."""
+    """The status toast should explain the 500 MB limit instead of a network reset."""
     i18n = I18N_JS.read_text(encoding="utf-8")
     ui = UI_JS.read_text(encoding="utf-8")
 

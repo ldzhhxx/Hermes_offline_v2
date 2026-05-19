@@ -98,7 +98,7 @@ def handle_upload(handler):
 
 # Maximum total extracted bytes — guards against zip/tar bombs.
 # Set to 10x the upload limit; a legitimate archive rarely exceeds 3-4x.
-_MAX_EXTRACTED_BYTES = 10 * 20 * 1024 * 1024  # 200 MB
+_MAX_EXTRACTED_BYTES = 10 * 500 * 1024 * 1024  # 5 GB
 
 
 def extract_archive(file_bytes: bytes, filename: str, workspace: Path):

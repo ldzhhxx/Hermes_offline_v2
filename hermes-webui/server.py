@@ -77,7 +77,7 @@ class QuietHTTPServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    timeout = 30  # seconds — kills idle/incomplete connections to prevent thread exhaustion
+    timeout = 600  # seconds — large uploads (up to 500MB) need generous timeout
     
     def setup(self):
         """Set socket options for each accepted connection."""
