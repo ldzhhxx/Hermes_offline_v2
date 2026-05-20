@@ -60,7 +60,7 @@ RUN python -m venv /opt/hermes-offline/.venv \
     && /opt/hermes-offline/.venv/bin/python -m pip install --upgrade pip setuptools wheel \
     && /opt/hermes-offline/.venv/bin/pip install -e './hermes-agent[messaging,cli,pty]' \
     && /opt/hermes-offline/.venv/bin/pip install -r ./hermes-webui/requirements.txt \
-    && /opt/hermes-offline/.venv/bin/pip install minio>=7.2.0,<8 \
+    && /opt/hermes-offline/.venv/bin/pip install minio \
     && npm config set fetch-retries 5 \
     && npm config set fetch-retry-factor 2 \
     && npm config set fetch-retry-mintimeout 20000 \
