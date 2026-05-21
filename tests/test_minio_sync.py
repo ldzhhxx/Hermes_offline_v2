@@ -511,3 +511,94 @@ def test_cli_main_sync_state_alias(monkeypatch):
     assert minio_sync.main(["sync"]) == 0
     assert called == [True]
 
+
+
+# ── Quota auto-discovery (admin API → bucket tag → env) ────────────────────
+
+
+class _QuotaDiscoveryClient:
+    """Stub MinIO client exposing `get_bucket_tagging` for tag-based discovery.
+
+    A separate stub is cleaner than threading flags through `_RecordingClient`
+    because most discovery code paths don't touch any other client method.
+    """
+
+    def __init__(self, *, tags=None):
+        self._tags = dict(tags or {})
+
+    def get_bucket_tagging(self, bucket):
+        return dict(self._tags)
+
+
+def test_discover_quota_uses_bucket_tag_when_admin_api_unavailable(
+    tmp_path, monkeypatch
+):
+    # Force the admin-API path to return nothing without needing real MinIO.
+    monkeypatch.setattr(minio_sync, "_quota_from_admin_api", lambda client=None: 0)
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "user-x/diagent")
+    fake = _QuotaDiscoveryClient(tags={
+        # Per-prefix tag must win over the bucket-wide tag.
+        "hermes-quota-bytes-user-x/diagent": str(12 * 1024**3),
+        "hermes-quota-bytes": str(8 * 1024**3),
+    })
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+    monkeypatch.delenv("HERMES_MINIO_QUOTA_BYTES", raising=False)
+    quota, source = minio_sync.discover_quota()
+    assert quota == 12 * 1024**3
+    assert source == "bucket_tag"
+
+
+def test_discover_quota_uses_bucketwide_tag_when_no_prefix_tag(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(minio_sync, "_quota_from_admin_api", lambda client=None: 0)
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "user-x/diagent")
+    fake = _QuotaDiscoveryClient(tags={"hermes-quota-bytes": str(9 * 1024**3)})
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+    monkeypatch.delenv("HERMES_MINIO_QUOTA_BYTES", raising=False)
+    quota, source = minio_sync.discover_quota()
+    assert quota == 9 * 1024**3
+    assert source == "bucket_tag"
+
+
+def test_discover_quota_falls_back_to_env(monkeypatch):
+    monkeypatch.setattr(minio_sync, "_quota_from_admin_api", lambda client=None: 0)
+    monkeypatch.setattr(minio_sync, "_quota_from_bucket_tag", lambda client=None: 0)
+    monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(4 * 1024**3))
+    quota, source = minio_sync.discover_quota()
+    assert quota == 4 * 1024**3
+    assert source == "env"
+
+
+def test_discover_quota_unset_when_nothing_available(monkeypatch):
+    monkeypatch.setattr(minio_sync, "_quota_from_admin_api", lambda client=None: 0)
+    monkeypatch.setattr(minio_sync, "_quota_from_bucket_tag", lambda client=None: 0)
+    monkeypatch.delenv("HERMES_MINIO_QUOTA_BYTES", raising=False)
+    quota, source = minio_sync.discover_quota()
+    assert quota == 0
+    assert source == "unset"
+
+
+def test_discover_quota_admin_api_takes_precedence_over_tag_and_env(monkeypatch):
+    """Admin API result, when present, beats every other source."""
+    monkeypatch.setattr(
+        minio_sync, "_quota_from_admin_api", lambda client=None: 25 * 1024**3
+    )
+    monkeypatch.setattr(
+        minio_sync, "_quota_from_bucket_tag", lambda client=None: 9 * 1024**3
+    )
+    monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(4 * 1024**3))
+    quota, source = minio_sync.discover_quota()
+    assert quota == 25 * 1024**3
+    assert source == "admin_api"
+
+
+def test_quota_from_bucket_tag_rejects_non_numeric(monkeypatch):
+    """Garbled tag values fall through cleanly rather than crashing."""
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "")
+    fake = _QuotaDiscoveryClient(tags={"hermes-quota-bytes": "not-a-number"})
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+    assert minio_sync._quota_from_bucket_tag() == 0

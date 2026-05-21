@@ -1152,6 +1152,13 @@
       </div>
     </div>
     <div class="breadcrumb-bar" id="breadcrumbBar" style="display:none"></div>
+    <!-- Workspace MinIO sync mount: rendered by mountWorkspaceMinioSync()
+         in static/panels.js. Always present in the DOM (visible in both
+         configured and unavailable states); hidden by `hidden` until the
+         API replies so we don't flash an empty card on cold load. The
+         compact in-workspace placement replaces the previous misplacement
+         inside the analytics insights panel. -->
+    <div class="workspace-cloud-sync" id="workspaceMinioSyncMount" hidden></div>
     <div class="file-tree" id="fileTree"></div>
     <div id="wsEmptyState" style="display:none;flex:1;align-items:center;justify-content:center;padding:24px 16px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6"></div>
     <div class="preview-area" id="previewArea">

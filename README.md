@@ -364,10 +364,17 @@ docker build -f Dockerfile.iterative \
 | `HERMES_MINIO_PREFIX` | 对象前缀（如 `user-liudezheng/diagent`） | `""` |
 | `HERMES_MINIO_SECURE` | 是否使用 HTTPS | `false` |
 | `HERMES_MINIO_SYNC_INTERVAL` | 同步间隔（秒） | `300` |
-| `HERMES_MINIO_QUOTA_BYTES` | 该用户的存储配额（字节，0 表示未配置） | `0` |
+| `HERMES_MINIO_QUOTA_BYTES` | **回退** 存储配额（字节，0 表示未配置） — 仅当 MinIO 服务端无法自动发现时使用 | `0` |
 | `HERMES_MINIO_REGISTER_URL` | 用户未启用 MinIO 时显示的注册 / 申请存储链接 | — |
 
 > 💡 `HERMES_MINIO_QUOTA_BYTES` 与 `HERMES_MINIO_REGISTER_URL` 也可以在 `image-config/.env` 中设置，从而烘焙进镜像；运行时再用 `-e` 覆盖即可。
+>
+> 🔍 **配额自动发现**：默认情况下系统会按以下顺序尝试从 MinIO 服务自动发现配额：
+> 1. **MinIO Admin API** —— 通过 `bucket_quota_get` 读取存储桶级配额（需要管理员凭证）
+> 2. **存储桶标签** —— 读取 `hermes-quota-bytes-<prefix>` 或 `hermes-quota-bytes`（可通过 `mc tag set` 配置，无需管理员权限）
+> 3. **`HERMES_MINIO_QUOTA_BYTES` 环境变量** —— 仅作为运维兜底，UI 上会标注为 “operator override”
+>
+> 因此通常 **不需要** 手动设置 `HERMES_MINIO_QUOTA_BYTES`；只有当上面两条服务端发现路径都不可用时再使用此变量作为回退。
 
 ### 启动行为
 

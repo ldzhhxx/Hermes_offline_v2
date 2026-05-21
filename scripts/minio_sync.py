@@ -511,6 +511,163 @@ def compute_prefix_used_bytes(client=None, max_objects: int = 500000) -> int:
     return int(total)
 
 
+# ── Quota discovery ────────────────────────────────────────────────────────
+
+# Bucket-tag conventions checked when neither the admin API nor a per-prefix
+# tag is available. The first hit wins. ``hermes-quota-bytes-<prefix>`` lets
+# operators give different prefixes (one-user-per-container) different quotas
+# from a single bucket without enabling the admin API. The unsuffixed key
+# applies to every prefix in the bucket.
+_QUOTA_TAG_PREFIX_KEY = "hermes-quota-bytes"  # base name; prefixed with "<prefix>:"
+
+
+def _quota_env_bytes() -> int:
+    """Read the operator-configured override quota in bytes (``0`` = unset).
+
+    Kept separate from :func:`discover_quota` so callers (and tests) can
+    isolate the env-override path from real service-derived discovery.
+    """
+    raw = os.environ.get("HERMES_MINIO_QUOTA_BYTES", "")
+    try:
+        value = int(str(raw).strip()) if raw else 0
+    except ValueError:
+        return 0
+    return value if value > 0 else 0
+
+
+def _quota_from_admin_api(client=None) -> int:
+    """Try the MinIO admin API for a bucket-level quota.
+
+    Returns 0 when the SDK cannot import :class:`MinioAdmin`, when admin
+    credentials are missing/insufficient, or when the bucket has no quota
+    configured. Never raises; failures fall through to the next discovery
+    layer so unconfigured deployments stay quiet in logs.
+    """
+    if not MINIO_BUCKET or not MINIO_ENDPOINT:
+        return 0
+    try:
+        from minio import MinioAdmin  # type: ignore
+    except Exception:  # pragma: no cover - older SDK or missing module
+        return 0
+    try:
+        admin = MinioAdmin(
+            MINIO_ENDPOINT,
+            credentials=None,  # built from MINIO_ACCESS_KEY/SECRET_KEY env vars
+            secure=MINIO_SECURE,
+        )
+    except Exception:  # pragma: no cover - depends on SDK version
+        # Construction signatures differ across SDK versions; treat as no-op.
+        return 0
+    fetcher = getattr(admin, "get_bucket_quota", None) or getattr(
+        admin, "bucket_quota_get", None
+    )
+    if fetcher is None:
+        return 0
+    try:
+        info = fetcher(MINIO_BUCKET)
+    except Exception as exc:  # pragma: no cover - depends on remote
+        log.debug("bucket_quota admin call failed: %s", exc)
+        return 0
+    quota = 0
+    if isinstance(info, dict):
+        quota = int(info.get("quota") or info.get("size") or 0)
+    else:
+        quota = int(getattr(info, "quota", 0) or 0)
+    return quota if quota > 0 else 0
+
+
+def _quota_from_bucket_tag(client=None) -> int:
+    """Try a bucket-tag convention, scoped to the configured prefix when set.
+
+    Two keys are considered:
+
+      * ``hermes-quota-bytes-<prefix>`` — per-prefix override (preferred when
+        many users share the same bucket via different ``HERMES_MINIO_PREFIX``
+        values).
+      * ``hermes-quota-bytes`` — bucket-wide default.
+
+    The value must be a positive base-10 integer; anything else is treated
+    as "no quota configured" and falls through to the next discovery layer.
+    """
+    if not MINIO_BUCKET:
+        return 0
+    try:
+        if client is None:
+            client = get_client()
+    except Exception:  # pragma: no cover - depends on minio package
+        return 0
+    fetcher = getattr(client, "get_bucket_tagging", None)
+    if fetcher is None:
+        return 0
+    try:
+        tags = fetcher(MINIO_BUCKET)
+    except Exception as exc:  # pragma: no cover - depends on remote/SDK
+        log.debug("get_bucket_tagging failed: %s", exc)
+        return 0
+    # The SDK can return a Tags-like object exposing __iter__/items, or a
+    # plain dict. Normalize both shapes to a plain mapping.
+    if tags is None:
+        return 0
+    items: dict[str, str] = {}
+    if hasattr(tags, "items"):
+        try:
+            for k, v in tags.items():
+                items[str(k)] = str(v)
+        except Exception:  # pragma: no cover - defensive
+            return 0
+    elif isinstance(tags, dict):
+        items = {str(k): str(v) for k, v in tags.items()}
+    else:
+        return 0
+    keys_in_order: list[str] = []
+    if MINIO_PREFIX:
+        keys_in_order.append(f"{_QUOTA_TAG_PREFIX_KEY}-{MINIO_PREFIX}")
+    keys_in_order.append(_QUOTA_TAG_PREFIX_KEY)
+    for key in keys_in_order:
+        raw = items.get(key)
+        if not raw:
+            continue
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return 0
+
+
+def discover_quota(client=None) -> tuple[int, str]:
+    """Discover the per-bucket / per-prefix storage quota in bytes.
+
+    Resolution order:
+
+      1. MinIO admin API (``bucket_quota_get``) — service-derived, exact.
+      2. S3 bucket tag ``hermes-quota-bytes-<prefix>`` then
+         ``hermes-quota-bytes`` — operator can set this from ``mc tag set``
+         without enabling the admin API.
+      3. ``HERMES_MINIO_QUOTA_BYTES`` env override — kept as an explicit
+         fallback for deployments that cannot expose either of the above.
+      4. Otherwise unset (``0``, ``"unset"``).
+
+    Returns ``(bytes, source)``. ``source`` is one of ``'admin_api'``,
+    ``'bucket_tag'``, ``'env'``, or ``'unset'``.
+
+    The bridge surfaces ``source`` to the WebUI so operators understand
+    *why* a particular number is shown — and that the env override is the
+    last-resort path, not the canonical one.
+    """
+    quota = _quota_from_admin_api(client)
+    if quota > 0:
+        return quota, "admin_api"
+    quota = _quota_from_bucket_tag(client)
+    if quota > 0:
+        return quota, "bucket_tag"
+    quota = _quota_env_bytes()
+    if quota > 0:
+        return quota, "env"
+    return 0, "unset"
+
+
 # ── Upload: workspace (manual only) ────────────────────────────────────────
 
 
