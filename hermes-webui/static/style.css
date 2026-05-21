@@ -308,8 +308,7 @@
   .system-health-bar-fill{height:100%;width:0%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent-hover));transition:width .25s ease;}
   .system-health-foot{font-size:11px;color:var(--muted);line-height:1.45;opacity:.82;}
   /* MinIO sync panel — reuses .insights-card surface, adds local layout. */
-  .minio-sync-panel.insights-card{display:flex;flex-direction:column;gap:14px;}
-  .minio-sync-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .minio-sync-panel.insights-card{display:flex;flex-direction:column;gap:14px;}  .minio-sync-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
   .minio-sync-sub{font-size:11px;color:var(--muted);margin-top:-4px;line-height:1.45;}
   .minio-sync-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);color:var(--muted);background:var(--surface);max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .minio-sync-dot{width:7px;height:7px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);opacity:.88;}
@@ -369,6 +368,19 @@
     .minio-sync-row{flex-direction:column;align-items:stretch;}
     .minio-sync-row-actions{justify-content:flex-end;}
   }
+  /* Workspace right-side mount: the canonical home for MinIO sync UI in
+     this build. Sized for the narrow .rightpanel column rather than the
+     wider Insights tab, and visually anchored under the panel header so
+     it reads as part of workspace management. */
+  .workspace-cloud-sync{display:block;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface) 55%,transparent);padding:10px 12px;flex-shrink:0;max-height:60%;overflow-y:auto;}
+  .workspace-cloud-sync[hidden]{display:none;}
+  .workspace-cloud-sync .minio-sync-panel.insights-card{padding:10px 0;background:transparent;border:0;box-shadow:none;border-radius:0;gap:10px;}
+  .workspace-cloud-sync .insights-card-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
+  .workspace-cloud-sync .minio-sync-status{font-size:10px;padding:2px 6px;}
+  .workspace-cloud-sync .minio-sync-row{flex-direction:column;align-items:stretch;gap:8px;padding:8px 10px;}
+  .workspace-cloud-sync .minio-sync-row-actions{justify-content:flex-end;}
+  .workspace-cloud-sync .minio-ws-list{max-height:140px;}
+  .workspace-cloud-sync .minio-sync-quota-source{font-size:10px;color:var(--muted);font-style:italic;line-height:1.3;}
   .app-titlebar-icon{display:inline-flex;align-items:center;color:var(--accent);}
   .app-titlebar-title{font-size:12px;font-weight:600;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw;}
   .app-titlebar-sub{font-size:10px;color:var(--muted);background:var(--hover-bg);padding:2px 7px;border-radius:4px;font-family:'SF Mono',ui-monospace,monospace;white-space:nowrap;flex-shrink:0;}

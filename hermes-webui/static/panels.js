@@ -2175,19 +2175,17 @@ async function loadInsights(animate) {
   }
   const period = ($('insightsPeriod') || {}).value || '30';
   try {
-    const [data, wikiStatus, minioStatus] = await Promise.all([
+    // MinIO sync controls used to render here as a misplaced "random card"
+    // alongside analytics. They now live in the workspace right-side area
+    // (mountWorkspaceMinioSync) and are only fetched there; insights stays
+    // analytics-only and avoids an extra status round-trip per refresh.
+    const [data, wikiStatus] = await Promise.all([
       api(`/api/insights?days=${period}`),
       api('/api/wiki/status').catch(err => ({status:'error', error: err.message || String(err)})),
-      api('/api/minio/sync/status').catch(_ => null),
     ]);
-    _minioSyncStatusCache = minioStatus;
-    _renderInsights(data, box, wikiStatus, minioStatus);
-    _bindMinioSyncControls();
+    _renderInsights(data, box, wikiStatus);
     if (typeof _syncSystemHealthMonitorVisibility === 'function') _syncSystemHealthMonitorVisibility();
     if (typeof pollSystemHealth === 'function') void pollSystemHealth();
-    if (minioStatus && (minioStatus.running||{}).state || (minioStatus && (minioStatus.running||{}).workspace)) {
-      _pollMinioSyncWhileRunning();
-    }
   } catch(e) {
     box.innerHTML = `<div style="color:var(--accent);font-size:12px">${esc(t('error_prefix') + e.message)}</div>`;
   } finally {
@@ -2232,13 +2230,24 @@ function _renderSystemHealthPanel() {
     </section>`;
 }
 
-// ── MinIO sync panel ──
-// Render a manual-sync control surface. We never auto-sync the workspace in
-// the background — the daemon only handles lightweight Hermes state — so this
-// panel exists for operators/users to trigger explicit workspace uploads
-// with safety options + selectable scope. When MinIO is not enabled or
-// not configured, the panel renders an unavailable card with an optional
-// registration link injected from the env-driven HERMES_MINIO_REGISTER_URL.
+// ── MinIO sync panel (mounts in the workspace right-side area) ──
+//
+// These helpers render the MinIO sync controls into the workspace right-side
+// panel — `#workspaceMinioSyncMount` in index.html — so MinIO surfaces are
+// part of the workspace management UX rather than buried under analytics.
+//
+// The daemon never auto-syncs the workspace (only lightweight Hermes state
+// is automatic). This panel exists for users to:
+//
+//   * trigger explicit workspace uploads with safety options + selectable
+//     scope (preserving the strict path validation done server-side);
+//   * see the current configuration and live storage usage; or
+//   * see a clear "unavailable" state with an optional registration link
+//     when the user's container does not have MinIO configured at all.
+//
+// Quota is now reported with a `quota_source` tag from the bridge — the
+// WebUI prefers service-derived values (admin API / bucket tag) and only
+// shows the env-override fallback when nothing better is available.
 let _minioSyncStatusCache = null;
 // Per-render selection of workspace entries (paths) for the workspace lane.
 // Default: everything unticked. The plan's safety guidance leans toward "no
@@ -2382,6 +2391,17 @@ function _renderMinioSyncPanel(payload) {
     : Number(payload.remaining_bytes);
   const usedPct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const usedClass = usedPct >= 95 ? 'is-critical' : (usedPct >= 80 ? 'is-warn' : '');
+  // Surface where the quota came from so operators understand whether the
+  // displayed limit was discovered live (admin API / bucket tag) or copied
+  // from the env-override fallback. The env path is always shown as such —
+  // the user explicitly asked us not to treat env quota as the primary model.
+  const quotaSource = String((payload.quota_source || 'unset')).toLowerCase();
+  const quotaSourceLabel = (quota > 0)
+    ? (quotaSource === 'admin_api' ? 'auto-discovered (MinIO admin API)'
+       : quotaSource === 'bucket_tag' ? 'auto-discovered (bucket tag)'
+       : quotaSource === 'env' ? 'operator override (HERMES_MINIO_QUOTA_BYTES)'
+       : 'unknown source')
+    : '';
   const quotaBlock = quota > 0
     ? `<div class="minio-sync-quota">
         <div class="minio-sync-quota-row">
@@ -2393,6 +2413,7 @@ function _renderMinioSyncPanel(payload) {
           <span class="minio-sync-quota-label">Remaining</span>
           <span class="minio-sync-quota-value">${esc(remaining === null ? '—' : _formatMinioBytes(remaining))}</span>
         </div>
+        <div class="minio-sync-quota-source" data-quota-source="${esc(quotaSource)}">${esc(quotaSourceLabel)}</div>
       </div>`
     : `<div class="minio-sync-quota minio-sync-quota--unset">
          <div class="minio-sync-quota-row">
@@ -2401,8 +2422,9 @@ function _renderMinioSyncPanel(payload) {
          </div>
          <div class="minio-sync-quota-row">
            <span class="minio-sync-quota-label">Quota</span>
-           <span class="minio-sync-quota-value">Not configured</span>
+           <span class="minio-sync-quota-value">Auto-discovery returned no quota</span>
          </div>
+         <div class="minio-sync-quota-source" data-quota-source="unset">Operator may set HERMES_MINIO_QUOTA_BYTES as a fallback</div>
        </div>`;
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
 
@@ -2554,27 +2576,49 @@ function _refreshMinioWsSummary() {
   }
 }
 async function refreshMinioSyncStatus() {
-  const host = document.getElementById('minioSyncPanel');
-  if (!host) return null;
+  // The MinIO panel always renders into the workspace right-side mount.
+  // We render even when MinIO is not configured (the mount surfaces the
+  // unavailable state + registration link there) so users without storage
+  // are not silently denied feedback.
+  const mount = document.getElementById('workspaceMinioSyncMount');
+  if (!mount) return null;
   try {
     const payload = await api('/api/minio/sync/status');
     _minioSyncStatusCache = payload;
-    const replacement = _renderMinioSyncPanel(payload);
-    if (!replacement) {
-      host.outerHTML = '';
+    const html = _renderMinioSyncPanel(payload);
+    if (!html) {
+      // Defensive: bridge always returns a payload, but if rendering ever
+      // produces empty markup, keep the mount in the DOM with a minimal
+      // fallback so it can recover on the next refresh tick instead of
+      // disappearing forever.
+      mount.innerHTML = '';
+      mount.hidden = true;
       return payload;
     }
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = replacement.trim();
-    const fresh = wrapper.firstElementChild;
-    if (fresh) {
-      host.replaceWith(fresh);
-      _bindMinioSyncControls();
-    }
+    mount.innerHTML = html;
+    mount.hidden = false;
+    _bindMinioSyncControls();
     return payload;
-  } catch (_) {
+  } catch (e) {
+    // On a network/HTTP error we keep whatever was last shown; better to
+    // leave the user looking at the previous state than to wipe the panel
+    // and re-show "not configured" while the API is briefly flaky.
     return null;
   }
+}
+
+// Public entry point for the workspace right-side area. Called from boot.js
+// once on page load and whenever the workspace context changes. Idempotent:
+// runs `refreshMinioSyncStatus` and ignores no-op cases (e.g. mount not in
+// the DOM yet because the workspace panel was collapsed).
+async function mountWorkspaceMinioSync() {
+  const mount = document.getElementById('workspaceMinioSyncMount');
+  if (!mount) return null;
+  const payload = await refreshMinioSyncStatus();
+  if (payload && ((payload.running||{}).state || (payload.running||{}).workspace)) {
+    _pollMinioSyncWhileRunning();
+  }
+  return payload;
 }
 function _pollMinioSyncWhileRunning() {
   const tick = async () => {
@@ -2699,7 +2743,7 @@ function _renderLlmWikiStatus(d) {
     </div>`;
 }
 
-function _renderInsights(d, box, wikiStatus, minioStatus) {
+function _renderInsights(d, box, wikiStatus) {
   const fmtNum = n => Number(n || 0).toLocaleString();
   const fmtCost = c => {
     const value = Number(c || 0);
@@ -2799,7 +2843,6 @@ function _renderInsights(d, box, wikiStatus, minioStatus) {
 
   box.innerHTML = `
     ${_renderSystemHealthPanel()}
-    ${_renderMinioSyncPanel(minioStatus)}
     ${_renderLlmWikiStatus(wikiStatus)}
     <div class="insights-grid">
       ${overviewCards.map(c => `<div class="insights-stat"><div class="insights-stat-icon">${c.icon}</div><div class="insights-stat-info"><div class="insights-stat-value">${c.value}</div><div class="insights-stat-label">${esc(c.label)}</div></div></div>`).join('')}
@@ -6242,3 +6285,44 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
     showToast(t('checkpoint_restore')+': '+e.message,'error');
   }
 }
+
+// ── Workspace MinIO sync mount bootstrap ──────────────────────────────────
+//
+// Render the MinIO sync surface into the workspace right-side area on first
+// paint. The previous build silently hid these controls inside the analytics
+// "Insights" tab, which meant users never saw their MinIO state — including
+// the unavailable card with the registration link — unless they happened to
+// navigate to a panel they had no reason to open.
+//
+// panels.js is loaded with `defer`, so the DOM is fully parsed by the time
+// this runs; we still defer the actual fetch with setTimeout(0) so the rest
+// of script setup completes before we hit the network. boot.js calls back
+// into mountWorkspaceMinioSync() too; both calls are idempotent.
+//
+// The whole bootstrap is wrapped in a try/catch so that minimal Node-VM
+// contexts used by static-asset tests (which stub a partial `document`)
+// don't blow up while loading panels.js for renderer-specific assertions.
+(function _bootstrapWorkspaceMinioSyncMount(){
+  try {
+    const start = () => {
+      if (typeof mountWorkspaceMinioSync === 'function') {
+        try { mountWorkspaceMinioSync(); } catch (_) { /* tolerated */ }
+      }
+    };
+    const hasSetTimeout = typeof setTimeout === 'function';
+    const readyState = (typeof document !== 'undefined' && document)
+      ? document.readyState : undefined;
+    if (readyState === 'loading' && typeof document !== 'undefined'
+        && document.addEventListener) {
+      document.addEventListener(
+        'DOMContentLoaded',
+        () => { if (hasSetTimeout) setTimeout(start, 0); else start(); },
+        { once: true }
+      );
+    } else if (hasSetTimeout) {
+      setTimeout(start, 0);
+    }
+  } catch (_) {
+    /* test-only contexts may lack the expected globals; silently skip */
+  }
+})();

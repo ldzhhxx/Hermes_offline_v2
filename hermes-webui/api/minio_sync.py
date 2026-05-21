@@ -97,13 +97,53 @@ def _public_config() -> dict[str, Any]:
 
 
 def _quota_bytes() -> int:
-    """Return the operator-configured per-user quota in bytes (``0`` = unset)."""
+    """Return the operator-configured per-user quota in bytes (``0`` = unset).
+
+    Kept for backwards compatibility with callers/tests that expect to read
+    the env override directly. Prefer :func:`_discover_quota` for the public
+    status payload, which also reports whether the value came from real
+    service discovery or from this fallback.
+    """
     raw = os.environ.get("HERMES_MINIO_QUOTA_BYTES", "")
     try:
         value = int(str(raw).strip()) if raw else 0
     except ValueError:
         return 0
     return value if value > 0 else 0
+
+
+def _discover_quota(configured: bool) -> tuple[int, str]:
+    """Return ``(bytes, source)`` using service-derived discovery first.
+
+    The fallback chain (admin API → bucket tag → env override) lives in
+    :mod:`scripts.minio_sync.discover_quota`. We mirror it here for callers
+    that only have access to the bridge module so they can render *why* a
+    particular quota number is shown — operators should not have to guess
+    whether the displayed number came from the live MinIO service or from
+    a hand-set env override.
+
+    When MinIO isn't configured we still honour an explicit ``HERMES_MINIO_QUOTA_BYTES``
+    env variable so the WebUI can preview an operator's intended quota in
+    the unavailable card if they choose to set one. In practice the
+    unavailable card hides the quota anyway, but we keep the value
+    consistent across paths.
+    """
+    if not configured:
+        env = _quota_bytes()
+        return (env, "env") if env > 0 else (0, "unset")
+    module = _load_minio_sync_module()
+    if module is not None and hasattr(module, "discover_quota"):
+        try:
+            quota, source = module.discover_quota()
+            quota = int(quota)
+            source = str(source or "unset")
+            if quota > 0:
+                return quota, source
+        except Exception as exc:  # pragma: no cover - depends on remote
+            logger.debug("discover_quota failed: %s", exc)
+    # Module unavailable or returned unset: fall back to env directly.
+    env = _quota_bytes()
+    return (env, "env") if env > 0 else (0, "unset")
 
 
 def _register_url() -> str:
@@ -243,7 +283,7 @@ def _record_result(lane: str, payload: dict[str, Any]) -> None:
 def _snapshot_status() -> dict[str, Any]:
     cfg = _public_config()
     configured, unavailable_reason = _config_completeness(cfg)
-    quota = _quota_bytes()
+    quota, quota_source = _discover_quota(configured)
     used = _used_bytes(configured) if configured else 0
     if quota > 0:
         remaining = max(0, quota - used)
@@ -262,6 +302,10 @@ def _snapshot_status() -> dict[str, Any]:
         "configured": configured,
         "unavailable_reason": unavailable_reason,
         "quota_bytes": quota,
+        # Auto-discovery source: 'admin_api' | 'bucket_tag' | 'env' | 'unset'.
+        # The WebUI labels this so operators don't mistake the env-override
+        # fallback for service-derived discovery.
+        "quota_source": quota_source,
         "used_bytes": used,
         "remaining_bytes": remaining if quota > 0 else None,
         "register_url": register_url,
