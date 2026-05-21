@@ -2175,13 +2175,19 @@ async function loadInsights(animate) {
   }
   const period = ($('insightsPeriod') || {}).value || '30';
   try {
-    const [data, wikiStatus] = await Promise.all([
+    const [data, wikiStatus, minioStatus] = await Promise.all([
       api(`/api/insights?days=${period}`),
       api('/api/wiki/status').catch(err => ({status:'error', error: err.message || String(err)})),
+      api('/api/minio/sync/status').catch(_ => null),
     ]);
-    _renderInsights(data, box, wikiStatus);
+    _minioSyncStatusCache = minioStatus;
+    _renderInsights(data, box, wikiStatus, minioStatus);
+    _bindMinioSyncControls();
     if (typeof _syncSystemHealthMonitorVisibility === 'function') _syncSystemHealthMonitorVisibility();
     if (typeof pollSystemHealth === 'function') void pollSystemHealth();
+    if (minioStatus && (minioStatus.running||{}).state || (minioStatus && (minioStatus.running||{}).workspace)) {
+      _pollMinioSyncWhileRunning();
+    }
   } catch(e) {
     box.innerHTML = `<div style="color:var(--accent);font-size:12px">${esc(t('error_prefix') + e.message)}</div>`;
   } finally {
@@ -2224,6 +2230,427 @@ function _renderSystemHealthPanel() {
       </div>
       <div class="system-health-foot">Live snapshot only; historical resource charts can build on this surface later.</div>
     </section>`;
+}
+
+// ── MinIO sync panel ──
+// Render a manual-sync control surface. We never auto-sync the workspace in
+// the background — the daemon only handles lightweight Hermes state — so this
+// panel exists for operators/users to trigger explicit workspace uploads
+// with safety options + selectable scope. When MinIO is not enabled or
+// not configured, the panel renders an unavailable card with an optional
+// registration link injected from the env-driven HERMES_MINIO_REGISTER_URL.
+let _minioSyncStatusCache = null;
+// Per-render selection of workspace entries (paths) for the workspace lane.
+// Default: everything unticked. The plan's safety guidance leans toward "no
+// dangerous hidden scope", so an empty selection blocks submission rather
+// than syncing the whole workspace silently.
+let _minioWorkspaceSelection = new Set();
+function _formatMinioBytes(bytes) {
+  if (bytes === null || bytes === undefined) return '—';
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = n;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx++;
+  }
+  // Tighter widths: 2 decimals when small, fewer as the magnitude grows.
+  const decimals = value < 10 ? 2 : (value < 100 ? 1 : 0);
+  return `${value.toFixed(decimals)} ${units[idx]}`;
+}
+function _formatMinioTimestamp(epoch) {
+  if (!epoch) return '';
+  try { return new Date(epoch * 1000).toLocaleString(); }
+  catch (_) { return ''; }
+}
+function _minioSyncSummary(result) {
+  if (!result) return 'No sync attempted yet.';
+  if (result.error && !result.ok) return `Error: ${result.error}`;
+  const d = result.details || {};
+  const bits = [];
+  if (typeof d.uploaded === 'number') bits.push(`${d.uploaded} uploaded`);
+  if (typeof d.skipped === 'number' && d.skipped > 0) bits.push(`${d.skipped} skipped`);
+  if (typeof d.deleted === 'number' && d.deleted > 0) bits.push(`${d.deleted} deleted`);
+  if (Array.isArray(d.selected_paths) && d.selected_paths.length) {
+    bits.push(`${d.selected_paths.length} selected`);
+  }
+  const errCount = Array.isArray(d.errors) ? d.errors.length : 0;
+  if (errCount > 0) bits.push(`${errCount} error${errCount === 1 ? '' : 's'}`);
+  if (typeof result.duration_seconds === 'number') {
+    bits.push(`${result.duration_seconds.toFixed(1)}s`);
+  }
+  if (!bits.length) return result.ok ? 'Completed.' : 'Failed.';
+  return bits.join(' · ');
+}
+function _renderMinioSyncResult(lane, result) {
+  if (!result) {
+    return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}">No ${lane} sync attempted yet.</div>`;
+  }
+  const klass = result.ok ? 'ok' : 'err';
+  const ts = _formatMinioTimestamp(result.finished_at);
+  const tsBlock = ts ? `<span class="minio-sync-result-ts">${esc(ts)}</span>` : '';
+  return `<div class="minio-sync-result minio-sync-result--${klass}" data-lane="${lane}">
+    <span class="minio-sync-result-summary">${esc(_minioSyncSummary(result))}</span>
+    ${tsBlock}
+  </div>`;
+}
+function _renderMinioWorkspaceEntries(payload) {
+  const entries = Array.isArray(payload && payload.workspace_entries)
+    ? payload.workspace_entries
+    : [];
+  if (!entries.length) {
+    return `<div class="minio-sync-empty">${esc('Workspace is empty — nothing to sync.')}</div>`;
+  }
+  // Drop selection entries whose path no longer exists on disk so the
+  // summary stays accurate after files were moved/deleted between renders.
+  const liveKeys = new Set(entries.map(e => e.path));
+  for (const k of Array.from(_minioWorkspaceSelection)) {
+    if (!liveKeys.has(k)) _minioWorkspaceSelection.delete(k);
+  }
+  const rows = entries.map((e, idx) => {
+    const id = `minioWsItem_${idx}`;
+    const checked = _minioWorkspaceSelection.has(e.path) ? 'checked' : '';
+    const sizeStr = _formatMinioBytes(e.size);
+    const meta = e.type === 'dir'
+      ? `${typeof e.child_count === 'number' ? e.child_count + ' files · ' : ''}${sizeStr}`
+      : sizeStr;
+    const icon = e.type === 'dir' ? '📁' : '📄';
+    return `<label class="minio-ws-entry" for="${id}">
+      <input type="checkbox" id="${id}"
+             class="minio-ws-entry-cb"
+             data-path="${esc(e.path)}"
+             data-size="${Number(e.size) || 0}"
+             ${checked}>
+      <span class="minio-ws-entry-icon" aria-hidden="true">${icon}</span>
+      <span class="minio-ws-entry-name">${esc(e.path)}</span>
+      <span class="minio-ws-entry-meta">${esc(meta)}</span>
+    </label>`;
+  }).join('');
+  return `<div class="minio-ws-toolbar">
+    <button type="button" class="minio-ws-toolbar-btn" id="minioWsSelectAll">Select all</button>
+    <button type="button" class="minio-ws-toolbar-btn" id="minioWsClear">Clear</button>
+    <span class="minio-ws-toolbar-summary" id="minioWsSummary"></span>
+  </div>
+  <div class="minio-ws-list" id="minioWsList">${rows}</div>`;
+}
+function _renderMinioUnavailableCard(payload) {
+  const reason = (payload && payload.unavailable_reason)
+    || 'MinIO sync is not enabled for this account.';
+  const url = (payload && payload.register_url) || '';
+  // Validate the URL scheme so a misconfigured env variable can't smuggle
+  // javascript:/data: into the link target.
+  const safeUrl = /^https?:\/\//i.test(url) ? url : '';
+  const cta = safeUrl
+    ? `<a class="minio-sync-register-link" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Register / Request storage →</a>`
+    : '';
+  return `
+    <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO sync controls">
+      <div class="minio-sync-head">
+        <div>
+          <div class="insights-card-title">MinIO sync</div>
+          <div class="minio-sync-sub">${esc('This account does not currently have MinIO sync enabled.')}</div>
+        </div>
+        <span class="minio-sync-status minio-sync-status--off"><span class="minio-sync-dot" aria-hidden="true"></span>Unavailable</span>
+      </div>
+      <div class="minio-sync-unavailable">
+        <div class="minio-sync-unavailable-text">${esc(reason)}</div>
+        ${cta}
+      </div>
+    </section>`;
+}
+function _renderMinioSyncPanel(payload) {
+  if (!payload) return '';
+  const cfg = payload.config || {};
+  const isEnabled = !!cfg.enabled;
+  const isConfigured = !!payload.configured;
+  if (!isEnabled || !isConfigured) {
+    return _renderMinioUnavailableCard(payload);
+  }
+  const running = payload.running || {};
+  const last = payload.last_result || {};
+  const stateRunning = !!running.state;
+  const wsRunning = !!running.workspace;
+  const target = `${esc(cfg.endpoint || '—')}/${esc(cfg.bucket || '—')}${cfg.prefix ? '/' + esc(cfg.prefix) : ''}`;
+  const intervalLine = `Daemon syncs Hermes state every ${Math.max(1, cfg.sync_interval_seconds || 0)}s. Workspace upload is manual only.`;
+
+  const quota = Number(payload.quota_bytes) || 0;
+  const used = Number(payload.used_bytes) || 0;
+  const remaining = (payload.remaining_bytes === null || payload.remaining_bytes === undefined)
+    ? null
+    : Number(payload.remaining_bytes);
+  const usedPct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
+  const usedClass = usedPct >= 95 ? 'is-critical' : (usedPct >= 80 ? 'is-warn' : '');
+  const quotaBlock = quota > 0
+    ? `<div class="minio-sync-quota">
+        <div class="minio-sync-quota-row">
+          <span class="minio-sync-quota-label">Used</span>
+          <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))}${usedPct ? ` (${usedPct}%)` : ''}</span>
+        </div>
+        <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
+        <div class="minio-sync-quota-row">
+          <span class="minio-sync-quota-label">Remaining</span>
+          <span class="minio-sync-quota-value">${esc(remaining === null ? '—' : _formatMinioBytes(remaining))}</span>
+        </div>
+      </div>`
+    : `<div class="minio-sync-quota minio-sync-quota--unset">
+         <div class="minio-sync-quota-row">
+           <span class="minio-sync-quota-label">Used</span>
+           <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))}</span>
+         </div>
+         <div class="minio-sync-quota-row">
+           <span class="minio-sync-quota-label">Quota</span>
+           <span class="minio-sync-quota-value">Not configured</span>
+         </div>
+       </div>`;
+  const entriesBlock = _renderMinioWorkspaceEntries(payload);
+
+  return `
+    <section class="insights-card minio-sync-panel" id="minioSyncPanel" aria-label="MinIO sync controls">
+      <div class="minio-sync-head">
+        <div>
+          <div class="insights-card-title">MinIO sync</div>
+          <div class="minio-sync-sub">${esc(intervalLine)}</div>
+        </div>
+        <span class="minio-sync-status" id="minioSyncStatus"><span class="minio-sync-dot" aria-hidden="true"></span>${cfg.secure ? 'HTTPS' : 'HTTP'} · ${esc(target)}</span>
+      </div>
+
+      ${quotaBlock}
+
+      <div class="minio-sync-row">
+        <div class="minio-sync-row-info">
+          <div class="minio-sync-row-title">Hermes state</div>
+          <div class="minio-sync-row-sub">Skills, sessions, memories, kanban, state.db. Synced automatically; this button forces an immediate run.</div>
+          ${_renderMinioSyncResult('state', last.state)}
+        </div>
+        <div class="minio-sync-row-actions">
+          <button type="button" class="minio-sync-btn" id="minioSyncStateBtn" onclick="triggerMinioStateSync()" ${stateRunning ? 'disabled' : ''}>
+            ${stateRunning ? 'Syncing…' : 'Sync state now'}
+          </button>
+        </div>
+      </div>
+
+      <div class="minio-sync-row minio-sync-row--workspace">
+        <div class="minio-sync-row-info">
+          <div class="minio-sync-row-title">Workspace</div>
+          <div class="minio-sync-row-sub">User files under <code>workspace/</code>. Manual only — pick the items you want to upload.</div>
+          ${entriesBlock}
+          <div class="minio-sync-options">
+            <label class="minio-sync-option">
+              <span>Mode</span>
+              <select id="minioWorkspaceMode" ${wsRunning ? 'disabled' : ''}>
+                <option value="safe" selected>Safe (skip unchanged)</option>
+                <option value="mirror">Mirror (always overwrite)</option>
+              </select>
+            </label>
+            <label class="minio-sync-option minio-sync-option--danger" id="minioCleanupOption" hidden>
+              <input type="checkbox" id="minioCleanupRemote" ${wsRunning ? 'disabled' : ''}>
+              <span>Delete remote files that no longer exist locally (within selected scope)</span>
+            </label>
+          </div>
+          <div class="minio-sync-warn" id="minioMirrorWarn" hidden>
+            Mirror mode overwrites every selected remote file with the local version. With “delete remote extras” checked, it also <strong>removes</strong> remote files missing locally — but only inside the paths you selected.
+          </div>
+          <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
+          ${_renderMinioSyncResult('workspace', last.workspace)}
+        </div>
+        <div class="minio-sync-row-actions">
+          <button type="button" class="minio-sync-btn" id="minioSyncWorkspaceBtn" onclick="triggerMinioWorkspaceSync()" ${wsRunning ? 'disabled' : ''}>
+            ${wsRunning ? 'Syncing…' : 'Sync selected'}
+          </button>
+        </div>
+      </div>
+    </section>`;
+}
+function _bindMinioSyncControls() {
+  const modeSel = document.getElementById('minioWorkspaceMode');
+  const cleanupRow = document.getElementById('minioCleanupOption');
+  const cleanupBox = document.getElementById('minioCleanupRemote');
+  const warn = document.getElementById('minioMirrorWarn');
+  if (modeSel && cleanupRow && warn) {
+    const sync = () => {
+      const mirror = modeSel.value === 'mirror';
+      cleanupRow.hidden = !mirror;
+      warn.hidden = !mirror;
+      if (!mirror && cleanupBox) cleanupBox.checked = false;
+    };
+    modeSel.addEventListener('change', sync);
+    sync();
+  }
+  // Workspace selection events: rebind every render because innerHTML wipes
+  // listeners.
+  const list = document.getElementById('minioWsList');
+  if (list) {
+    list.querySelectorAll('.minio-ws-entry-cb').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const path = cb.dataset.path;
+        if (!path) return;
+        if (cb.checked) _minioWorkspaceSelection.add(path);
+        else _minioWorkspaceSelection.delete(path);
+        _refreshMinioWsSummary();
+      });
+    });
+  }
+  const selectAll = document.getElementById('minioWsSelectAll');
+  if (selectAll) {
+    selectAll.addEventListener('click', () => {
+      const innerList = document.getElementById('minioWsList');
+      if (!innerList) return;
+      innerList.querySelectorAll('.minio-ws-entry-cb').forEach(cb => {
+        cb.checked = true;
+        if (cb.dataset.path) _minioWorkspaceSelection.add(cb.dataset.path);
+      });
+      _refreshMinioWsSummary();
+    });
+  }
+  const clearBtn = document.getElementById('minioWsClear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      _minioWorkspaceSelection.clear();
+      const innerList = document.getElementById('minioWsList');
+      if (innerList) innerList.querySelectorAll('.minio-ws-entry-cb').forEach(cb => { cb.checked = false; });
+      _refreshMinioWsSummary();
+    });
+  }
+  _refreshMinioWsSummary();
+}
+function _refreshMinioWsSummary() {
+  const summaryEl = document.getElementById('minioWsSummary');
+  const warnEl = document.getElementById('minioQuotaWarn');
+  const btn = document.getElementById('minioSyncWorkspaceBtn');
+  if (!summaryEl) return;
+  const payload = _minioSyncStatusCache || {};
+  const entries = Array.isArray(payload.workspace_entries) ? payload.workspace_entries : [];
+  const sizeByPath = new Map(entries.map(e => [e.path, Number(e.size) || 0]));
+  let totalSize = 0;
+  let count = 0;
+  for (const path of _minioWorkspaceSelection) {
+    if (!sizeByPath.has(path)) continue;
+    totalSize += sizeByPath.get(path);
+    count++;
+  }
+  if (count === 0) {
+    summaryEl.textContent = 'Nothing selected';
+  } else {
+    summaryEl.textContent = `${count} selected · ${_formatMinioBytes(totalSize)}`;
+  }
+  // Quota guard: block sync if the selection alone would exceed the
+  // remaining quota. The plan calls this out as a "prefer blocking" case.
+  let blocked = false;
+  let warnText = '';
+  const remaining = payload.remaining_bytes;
+  if (typeof remaining === 'number' && remaining >= 0 && totalSize > remaining) {
+    blocked = true;
+    warnText = `Selection (${_formatMinioBytes(totalSize)}) exceeds remaining quota (${_formatMinioBytes(remaining)}). Sync is blocked until you reduce the selection or free space.`;
+  }
+  if (warnEl) {
+    warnEl.hidden = !warnText;
+    warnEl.textContent = warnText;
+  }
+  if (btn) {
+    btn.disabled = (count === 0) || blocked || btn.dataset.busy === '1';
+    btn.dataset.blockedReason = blocked ? 'quota' : (count === 0 ? 'empty' : '');
+  }
+}
+async function refreshMinioSyncStatus() {
+  const host = document.getElementById('minioSyncPanel');
+  if (!host) return null;
+  try {
+    const payload = await api('/api/minio/sync/status');
+    _minioSyncStatusCache = payload;
+    const replacement = _renderMinioSyncPanel(payload);
+    if (!replacement) {
+      host.outerHTML = '';
+      return payload;
+    }
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = replacement.trim();
+    const fresh = wrapper.firstElementChild;
+    if (fresh) {
+      host.replaceWith(fresh);
+      _bindMinioSyncControls();
+    }
+    return payload;
+  } catch (_) {
+    return null;
+  }
+}
+function _pollMinioSyncWhileRunning() {
+  const tick = async () => {
+    const payload = await refreshMinioSyncStatus();
+    if (!payload) return;
+    const running = payload.running || {};
+    if (running.state || running.workspace) {
+      setTimeout(tick, 2000);
+    }
+  };
+  setTimeout(tick, 1500);
+}
+async function triggerMinioStateSync() {
+  const btn = document.getElementById('minioSyncStateBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/minio/sync/state', {method:'POST', body: JSON.stringify({})});
+    if (res && res.ok) {
+      if (typeof showToast === 'function') showToast('State sync started');
+      _pollMinioSyncWhileRunning();
+    } else if (typeof showToast === 'function') {
+      showToast(res && res.error ? res.error : 'Sync failed', 'error');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast(e.message || 'Sync failed', 'error');
+  } finally {
+    refreshMinioSyncStatus();
+  }
+}
+async function triggerMinioWorkspaceSync() {
+  const modeSel = document.getElementById('minioWorkspaceMode');
+  const cleanupBox = document.getElementById('minioCleanupRemote');
+  const mode = modeSel ? modeSel.value : 'safe';
+  const cleanup = !!(cleanupBox && cleanupBox.checked);
+  const paths = Array.from(_minioWorkspaceSelection);
+  if (!paths.length) {
+    if (typeof showToast === 'function') showToast('Select at least one item to sync', 'error');
+    return;
+  }
+  if (mode === 'mirror') {
+    const msg = cleanup
+      ? `Mirror mode WITH cleanup: every selected workspace file will be overwritten on MinIO and remote-only files within the selected scope will be deleted. Continue with ${paths.length} item(s)?`
+      : `Mirror mode: every selected workspace file will be overwritten on MinIO. Continue with ${paths.length} item(s)?`;
+    let ok = true;
+    if (typeof showConfirmDialog === 'function') {
+      ok = await showConfirmDialog({
+        title: 'Confirm workspace mirror',
+        message: msg,
+        confirmLabel: cleanup ? 'Mirror and delete extras' : 'Mirror',
+        danger: true,
+        focusCancel: true,
+      });
+    } else {
+      ok = window.confirm(msg);
+    }
+    if (!ok) return;
+  }
+  const btn = document.getElementById('minioSyncWorkspaceBtn');
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
+  try {
+    const res = await api('/api/minio/sync/workspace', {
+      method: 'POST',
+      body: JSON.stringify({mode, cleanup_remote: cleanup, paths}),
+    });
+    if (res && res.ok) {
+      if (typeof showToast === 'function') showToast('Workspace sync started');
+      _pollMinioSyncWhileRunning();
+    } else if (typeof showToast === 'function') {
+      showToast(res && res.error ? res.error : 'Sync failed', 'error');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast(e.message || 'Sync failed', 'error');
+  } finally {
+    if (btn) btn.dataset.busy = '0';
+    refreshMinioSyncStatus();
+  }
 }
 
 function _renderLlmWikiStatus(d) {
@@ -2272,7 +2699,7 @@ function _renderLlmWikiStatus(d) {
     </div>`;
 }
 
-function _renderInsights(d, box, wikiStatus) {
+function _renderInsights(d, box, wikiStatus, minioStatus) {
   const fmtNum = n => Number(n || 0).toLocaleString();
   const fmtCost = c => {
     const value = Number(c || 0);
@@ -2372,6 +2799,7 @@ function _renderInsights(d, box, wikiStatus) {
 
   box.innerHTML = `
     ${_renderSystemHealthPanel()}
+    ${_renderMinioSyncPanel(minioStatus)}
     ${_renderLlmWikiStatus(wikiStatus)}
     <div class="insights-grid">
       ${overviewCards.map(c => `<div class="insights-stat"><div class="insights-stat-icon">${c.icon}</div><div class="insights-stat-info"><div class="insights-stat-value">${c.value}</div><div class="insights-stat-label">${esc(c.label)}</div></div></div>`).join('')}

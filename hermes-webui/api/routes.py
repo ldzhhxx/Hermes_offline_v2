@@ -2901,6 +2901,10 @@ def handle_get(handler, parsed) -> bool:
         j(handler, build_system_health_payload())
         return True
 
+    if parsed.path == "/api/minio/sync/status":
+        from api import minio_sync as _minio_sync
+        return j(handler, _minio_sync.get_status())
+
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 
@@ -4934,6 +4938,29 @@ def handle_post(handler, parsed) -> bool:
         except Exception as e:
             logger.exception("rollback/restore failed")
             return bad(handler, str(e), status=500)
+
+    # ── MinIO sync (POST) ──
+    if parsed.path == "/api/minio/sync/state":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.trigger_state_sync()
+        status = 200 if result.get("ok") else 409
+        return j(handler, result, status=status)
+
+    if parsed.path == "/api/minio/sync/workspace":
+        from api import minio_sync as _minio_sync
+        body = body or {}
+        mode = (body or {}).get("mode", "safe")
+        cleanup_remote = bool((body or {}).get("cleanup_remote", False))
+        raw_paths = (body or {}).get("paths")
+        if raw_paths is not None and not isinstance(raw_paths, list):
+            return bad(handler, "paths must be a list of relative workspace paths")
+        result = _minio_sync.trigger_workspace_sync(
+            mode=mode,
+            cleanup_remote=cleanup_remote,
+            paths=raw_paths,
+        )
+        status = 200 if result.get("ok") else 409
+        return j(handler, result, status=status)
 
     return False  # 404
 

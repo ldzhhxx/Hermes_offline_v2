@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """MinIO state sync for Hermes Offline v2.
 
-Provides restore-on-startup and periodic-sync for k8s one-user-per-container usage.
-Uses the minio Python SDK (S3-compatible).
+Provides restore-on-startup, periodic lightweight state sync, and explicit
+manual workspace sync for k8s one-user-per-container usage. Uses the minio
+Python SDK (S3-compatible). The ``mc`` binary is **not** required and is not
+bundled in the image; mirror-style semantics are implemented in Python here.
 
 Environment variables:
   HERMES_MINIO_ENABLED       - "true" to enable MinIO mode (default: disabled)
@@ -12,15 +14,25 @@ Environment variables:
   HERMES_MINIO_BUCKET        - Bucket name
   HERMES_MINIO_PREFIX        - Object prefix (e.g. user-liudezheng/diagent)
   HERMES_MINIO_SECURE        - "true" for HTTPS (default: "false")
-  HERMES_MINIO_SYNC_INTERVAL - Sync interval in seconds (default: 300)
+  HERMES_MINIO_SYNC_INTERVAL - State sync interval in seconds (default: 300)
+
+CLI:
+  minio_sync.py restore
+  minio_sync.py sync-state                       # state allowlist only
+  minio_sync.py sync-workspace [--mode safe|mirror] [--cleanup-remote] \
+                               [--paths a/b c.txt ...]
+  minio_sync.py daemon                           # periodic state sync only
+  minio_sync.py sync                             # legacy alias for sync-state
 """
 
+import argparse
+import hashlib
+import json
 import logging
 import os
-import shutil
 import signal
 import sqlite3
-import subprocess
+import subprocess  # noqa: F401  (kept for forward-compat hooks)
 import sys
 import tempfile
 import time
@@ -46,7 +58,10 @@ MINIO_PREFIX = os.environ.get("HERMES_MINIO_PREFIX", "").strip("/")
 MINIO_SECURE = os.environ.get("HERMES_MINIO_SECURE", "false").lower() == "true"
 SYNC_INTERVAL = int(os.environ.get("HERMES_MINIO_SYNC_INTERVAL", "300"))
 
-# Files/dirs to sync under HERMES_HOME (relative paths)
+# Files/dirs to sync under HERMES_HOME (relative paths).
+# These are lightweight Hermes "state" — synced both periodically and on demand.
+# Workspace contents are *not* in this list and are only ever uploaded via the
+# explicit `sync-workspace` command.
 SYNC_INCLUDES_HOME = [
     "skills",
     "state.db",
@@ -78,6 +93,11 @@ SENSITIVE_PATTERNS = {
     "webui/settings.json",
     "webui/.sessions.json",
 }
+
+# Workspace sync modes
+WORKSPACE_MODE_SAFE = "safe"      # incremental: skip files that match remote
+WORKSPACE_MODE_MIRROR = "mirror"  # always overwrite remote with local
+WORKSPACE_MODES = (WORKSPACE_MODE_SAFE, WORKSPACE_MODE_MIRROR)
 
 
 def is_sensitive(rel_path: str) -> bool:
@@ -169,19 +189,88 @@ def safe_sqlite_backup(db_path: Path, dest_path: Path):
         src.close()
 
 
-# ── Upload (Sync to MinIO) ─────────────────────────────────────────────────
+def _md5_of_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    """Compute md5 hex digest of a file, streaming chunks."""
+    h = hashlib.md5()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
 
 
-def sync_to_minio():
-    """Upload local state to MinIO."""
+def _remote_object_meta(client, bucket: str, object_name: str):
+    """Return (size, etag) for a remote object, or None if it does not exist.
+
+    The MinIO Python SDK exposes a number of S3-style errors but stat_object
+    consistently raises an error whose attribute ``code`` includes
+    ``NoSuchKey`` when the object does not exist. We use a coarse, defensive
+    check so this also works under the test fakes.
+    """
+    try:
+        info = client.stat_object(bucket, object_name)
+    except Exception as exc:  # pragma: no cover - exercised via tests with fake client
+        code = getattr(exc, "code", "") or ""
+        msg = str(exc)
+        if "NoSuchKey" in code or "NoSuchKey" in msg or "Not Found" in msg or "404" in msg:
+            return None
+        # Treat unknown errors as "missing" so we err on the side of uploading
+        # rather than silently skipping. The actual upload will surface any
+        # real connectivity issue.
+        log.debug("stat_object(%s) raised %s; treating as missing", object_name, exc)
+        return None
+    size = getattr(info, "size", None)
+    etag = getattr(info, "etag", "") or ""
+    if isinstance(etag, str):
+        etag = etag.strip('"')
+    return size, etag
+
+
+def _should_skip_safe_upload(client, object_name: str, local_path: Path) -> bool:
+    """Return True if the remote already has an identical copy.
+
+    For multipart uploads, S3 etag is not a plain MD5. In that case we fall
+    back to size-based equality. This intentionally errs on the side of
+    "upload again" rather than skipping a real change.
+    """
+    meta = _remote_object_meta(client, MINIO_BUCKET, object_name)
+    if meta is None:
+        return False
+    size, etag = meta
+    try:
+        local_size = local_path.stat().st_size
+    except OSError:
+        return False
+    if size != local_size:
+        return False
+    # If etag looks like a plain hex md5 (no '-'), compare to local md5.
+    if etag and "-" not in etag and len(etag) == 32:
+        try:
+            return _md5_of_file(local_path) == etag.lower()
+        except OSError:
+            return False
+    # Multipart or unknown etag shape: trust size equality only.
+    return True
+
+
+# ── Upload: state (lightweight, daemon + manual) ───────────────────────────
+
+
+def sync_state_to_minio() -> dict:
+    """Upload only Hermes state (allowlist) to MinIO. Never touches workspace.
+
+    Returns a result dict: {"uploaded": int, "errors": [str], "mode": "state"}.
+    """
     client = get_client()
 
     if not client.bucket_exists(MINIO_BUCKET):
         client.make_bucket(MINIO_BUCKET)
 
     uploaded = 0
+    errors: list[str] = []
 
-    # Handle SQLite databases with safe backup
     sqlite_dbs = ["state.db", "kanban.db", "response_store.db"]
     with tempfile.TemporaryDirectory(prefix="hermes_sync_") as tmpdir:
         for db_name in sqlite_dbs:
@@ -196,8 +285,8 @@ def sync_to_minio():
                     uploaded += 1
                 except Exception as e:
                     log.warning("Failed to backup/upload %s: %s", db_name, e)
+                    errors.append(f"{db_name}: {e}")
 
-        # Handle regular files/dirs
         for item in SYNC_INCLUDES_HOME:
             if item in sqlite_dbs:
                 continue
@@ -205,22 +294,22 @@ def sync_to_minio():
             if not full_path.exists():
                 continue
             if full_path.is_file():
-                if not is_sensitive(item):
-                    try:
-                        client.fput_object(
-                            MINIO_BUCKET, object_key(f"home/{item}"), str(full_path)
-                        )
-                        uploaded += 1
-                    except Exception as e:
-                        log.warning("Failed to upload %s: %s", item, e)
+                if is_sensitive(item):
+                    continue
+                try:
+                    client.fput_object(
+                        MINIO_BUCKET, object_key(f"home/{item}"), str(full_path)
+                    )
+                    uploaded += 1
+                except Exception as e:
+                    log.warning("Failed to upload %s: %s", item, e)
+                    errors.append(f"{item}: {e}")
             elif full_path.is_dir():
                 for fpath in full_path.rglob("*"):
                     if not fpath.is_file():
                         continue
                     rel = str(fpath.relative_to(HERMES_HOME))
                     if is_sensitive(rel):
-                        continue
-                    if rel.endswith(("-wal", "-shm", "-journal")):
                         continue
                     try:
                         client.fput_object(
@@ -229,22 +318,349 @@ def sync_to_minio():
                         uploaded += 1
                     except Exception as e:
                         log.warning("Failed to upload %s: %s", rel, e)
+                        errors.append(f"{rel}: {e}")
 
-    # Sync workspace
+    log.info("State sync to MinIO complete: %d objects uploaded.", uploaded)
+    return {"mode": "state", "uploaded": uploaded, "errors": errors}
+
+
+# ── Workspace path validation + entry listing ──────────────────────────────
+
+
+def _normalize_workspace_rel(rel: str) -> str:
+    """Strip leading slashes / dots so callers can pass either './foo' or 'foo'."""
+    if not isinstance(rel, str):
+        raise ValueError("path must be a string")
+    candidate = rel.strip()
+    if not candidate:
+        raise ValueError("path is empty")
+    # Remove leading `./` so `./foo` and `foo` are equivalent.
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    if candidate in ("", "."):
+        raise ValueError("path is empty")
+    if candidate.startswith("/"):
+        raise ValueError(f"absolute path not allowed: {rel!r}")
+    if ".." in Path(candidate).parts:
+        raise ValueError(f"path traversal not allowed: {rel!r}")
+    return candidate
+
+
+def validate_workspace_paths(raw_paths) -> list[str]:
+    """Return a sanitized list of relative workspace paths.
+
+    Rules:
+      * each entry must be a non-empty string
+      * absolute paths and `..` traversal are rejected
+      * the resolved path must remain under ``HERMES_WORKSPACE``
+      * the path must currently exist locally (otherwise nothing to upload)
+
+    Symlinks pointing outside the workspace are rejected because a
+    user-supplied selection should not be able to leak files from outside the
+    container's workspace boundary, even if the link technically resolves to
+    a real file.
+    """
+    if raw_paths is None:
+        return []
+    if not isinstance(raw_paths, (list, tuple)):
+        raise ValueError("paths must be a list of strings")
+    workspace_root = HERMES_WORKSPACE.resolve()
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_paths:
+        rel = _normalize_workspace_rel(raw)
+        candidate = (HERMES_WORKSPACE / rel).resolve()
+        try:
+            candidate.relative_to(workspace_root)
+        except ValueError:
+            raise ValueError(f"path escapes workspace: {raw!r}")
+        if not candidate.exists():
+            raise ValueError(f"path does not exist: {rel}")
+        # Re-derive the canonical relative form from the resolved path so the
+        # returned list is normalized regardless of the user's input shape.
+        canonical = str(candidate.relative_to(workspace_root))
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        out.append(canonical)
+    return out
+
+
+def _iter_workspace_files_under(rel_path: str):
+    """Yield (rel, absolute_path) for files reachable from ``rel_path``.
+
+    ``rel_path`` is a workspace-relative entry (file or directory) that has
+    already passed validation. The yielded ``rel`` is the workspace-relative
+    string for ``fpath`` so callers can construct ``workspace/{rel}`` keys.
+    """
+    base = (HERMES_WORKSPACE / rel_path).resolve()
+    workspace_root = HERMES_WORKSPACE.resolve()
+    if base.is_file():
+        yield rel_path, base
+        return
+    if not base.is_dir():
+        return
+    for fpath in base.rglob("*"):
+        if not fpath.is_file():
+            continue
+        try:
+            rel = str(fpath.resolve().relative_to(workspace_root))
+        except ValueError:
+            # Skip anything that resolved outside the workspace (shouldn't
+            # happen because base passed validation, but defensive).
+            continue
+        yield rel, fpath
+
+
+def _dir_size_and_count(path: Path, max_files: int = 50000) -> tuple[int, int]:
+    """Return (total_size_bytes, file_count) under *path*.
+
+    Caps the walk at ``max_files`` files to avoid pathological cases (huge
+    workspaces, symlink loops). The cap is generous; real Hermes workspaces
+    rarely approach it.
+    """
+    total = 0
+    count = 0
+    if not path.is_dir():
+        return 0, 0
+    for fpath in path.rglob("*"):
+        if count >= max_files:
+            break
+        try:
+            if fpath.is_file():
+                total += fpath.stat().st_size
+                count += 1
+        except OSError:
+            continue
+    return total, count
+
+
+def list_workspace_entries(max_entries: int = 200) -> list[dict]:
+    """List top-level workspace entries with size + child counts.
+
+    Returns at most ``max_entries`` entries (sorted: directories first, then
+    files; alphabetical within each group). Each entry has::
+
+        {"path": "<relative>", "type": "file"|"dir", "size": <bytes>,
+         "child_count": <int>}  # child_count present for directories
+    """
+    if not HERMES_WORKSPACE.exists() or not HERMES_WORKSPACE.is_dir():
+        return []
+    entries: list[dict] = []
+    try:
+        children = sorted(HERMES_WORKSPACE.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return []
+    for child in children:
+        if len(entries) >= max_entries:
+            break
+        # Skip hidden entries by default — they're rarely user-relevant for
+        # sync, and including dotfiles can leak `.git/`, `.cache/`, etc.
+        if child.name.startswith("."):
+            continue
+        try:
+            if child.is_file():
+                size = child.stat().st_size
+                entries.append({
+                    "path": child.name,
+                    "type": "file",
+                    "size": int(size),
+                })
+            elif child.is_dir():
+                size, count = _dir_size_and_count(child)
+                entries.append({
+                    "path": child.name,
+                    "type": "dir",
+                    "size": int(size),
+                    "child_count": int(count),
+                })
+        except OSError:
+            continue
+    entries.sort(key=lambda e: (e["type"] != "dir", e["path"].lower()))
+    return entries
+
+
+def compute_prefix_used_bytes(client=None, max_objects: int = 500000) -> int:
+    """Return total bytes stored under the configured ``MINIO_PREFIX``.
+
+    Iterates ``client.list_objects`` and sums ``size``. Returns ``0`` if the
+    bucket is unreachable or the listing fails — callers treat that as
+    "unknown" rather than failing the whole status request.
+    """
+    if not MINIO_BUCKET:
+        return 0
+    try:
+        if client is None:
+            client = get_client()
+    except Exception:  # pragma: no cover - depends on minio package
+        return 0
+    prefix = object_key("")
+    total = 0
+    seen = 0
+    try:
+        for obj in client.list_objects(MINIO_BUCKET, prefix=prefix, recursive=True):
+            seen += 1
+            if seen > max_objects:
+                break
+            size = getattr(obj, "size", None)
+            if isinstance(size, int) and size >= 0:
+                total += size
+    except Exception as exc:  # pragma: no cover - depends on minio errors
+        log.debug("compute_prefix_used_bytes failed: %s", exc)
+        return 0
+    return int(total)
+
+
+# ── Upload: workspace (manual only) ────────────────────────────────────────
+
+
+def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
+                            cleanup_remote: bool = False,
+                            paths: list[str] | None = None) -> dict:
+    """Upload the workspace tree to MinIO with explicit semantics.
+
+    ``mode``:
+      - ``safe`` (default) — incremental: skip files whose remote copy already
+        matches the local size/etag. Never deletes anything remotely.
+      - ``mirror`` — overwrite remote with local for every file.
+
+    ``cleanup_remote``: only honored when ``mode='mirror'``. When True, deletes
+    remote objects under ``workspace/`` that no longer exist locally. This is
+    *opt-in* and labeled as dangerous in the WebUI — never the default.
+
+    ``paths``: optional list of workspace-relative entries to sync. When
+    provided, only files reached from those entries are uploaded, and the
+    cleanup step (if enabled) only considers remote objects whose key starts
+    with one of the corresponding prefixes — never the entire ``workspace/``
+    tree. ``None`` or an empty list means "sync the full workspace" (legacy
+    behaviour, kept for the CLI/daemon path that pre-dates path selection).
+    """
+    if mode not in WORKSPACE_MODES:
+        raise ValueError(f"invalid workspace sync mode: {mode!r}")
+    if cleanup_remote and mode != WORKSPACE_MODE_MIRROR:
+        raise ValueError("cleanup_remote requires mode='mirror'")
+
+    selected = validate_workspace_paths(paths) if paths else []
+
+    client = get_client()
+
+    if not client.bucket_exists(MINIO_BUCKET):
+        client.make_bucket(MINIO_BUCKET)
+
+    uploaded = 0
+    skipped = 0
+    deleted = 0
+    errors: list[str] = []
+    local_keys: set[str] = set()
+
     if HERMES_WORKSPACE.exists():
-        for fpath in HERMES_WORKSPACE.rglob("*"):
-            if not fpath.is_file():
-                continue
-            rel = str(fpath.relative_to(HERMES_WORKSPACE))
+        if selected:
+            file_iter = (
+                pair
+                for entry in selected
+                for pair in _iter_workspace_files_under(entry)
+            )
+        else:
+            file_iter = (
+                (str(fpath.relative_to(HERMES_WORKSPACE)), fpath)
+                for fpath in HERMES_WORKSPACE.rglob("*")
+                if fpath.is_file()
+            )
+        for rel, fpath in file_iter:
+            obj = object_key(f"workspace/{rel}")
+            local_keys.add(obj)
+            if mode == WORKSPACE_MODE_SAFE:
+                try:
+                    if _should_skip_safe_upload(client, obj, fpath):
+                        skipped += 1
+                        continue
+                except Exception as e:
+                    log.debug("safe-mode pre-check failed for %s: %s", rel, e)
             try:
-                client.fput_object(
-                    MINIO_BUCKET, object_key(f"workspace/{rel}"), str(fpath)
-                )
+                client.fput_object(MINIO_BUCKET, obj, str(fpath))
                 uploaded += 1
             except Exception as e:
                 log.warning("Failed to upload workspace/%s: %s", rel, e)
+                errors.append(f"workspace/{rel}: {e}")
 
-    log.info("Sync to MinIO complete: %d objects uploaded.", uploaded)
+    if cleanup_remote and mode == WORKSPACE_MODE_MIRROR:
+        # When the caller restricted the sync to a subset of the workspace,
+        # only consider remote objects under those subtrees. Without this
+        # scoping, a "mirror+cleanup" of one subdirectory would nuke every
+        # other remote workspace file the user *didn't* select. That is the
+        # exact safety footgun the v2 plan calls out:
+        #   "cleanup/remove mode must only consider the selected scope, not
+        #    nuke unrelated remote objects".
+        #
+        # File entries pass an exact key + `exact=True` because a plain
+        # prefix match on `workspace/notes.txt` would also match siblings
+        # like `workspace/notes.txt.bak`. Directory entries use a trailing
+        # slash for the same reason — `workspace/foo/` cannot accidentally
+        # match `workspace/foo_other/`.
+        cleanup_targets: list[tuple[str, bool]] = []
+        if selected:
+            for entry in selected:
+                abs_entry = (HERMES_WORKSPACE / entry)
+                if abs_entry.is_dir():
+                    cleanup_targets.append((object_key(f"workspace/{entry}/"), False))
+                else:
+                    cleanup_targets.append((object_key(f"workspace/{entry}"), True))
+        else:
+            cleanup_targets.append((object_key("workspace/"), False))
+        seen_remote: set[str] = set()
+        for ws_prefix, exact in cleanup_targets:
+            try:
+                if exact:
+                    # Single-key check: list with the exact name as prefix and
+                    # only act on the matching object.
+                    remote_objects = [
+                        obj for obj in client.list_objects(
+                            MINIO_BUCKET, prefix=ws_prefix, recursive=False)
+                        if getattr(obj, "object_name", None) == ws_prefix
+                    ]
+                else:
+                    remote_objects = list(client.list_objects(
+                        MINIO_BUCKET, prefix=ws_prefix, recursive=True))
+            except Exception as e:
+                log.warning("Failed to list remote workspace prefix %s: %s",
+                            ws_prefix, e)
+                errors.append(f"cleanup-list {ws_prefix}: {e}")
+                continue
+            for obj in remote_objects:
+                name = getattr(obj, "object_name", None)
+                if not name or name in seen_remote or name in local_keys:
+                    continue
+                seen_remote.add(name)
+                try:
+                    client.remove_object(MINIO_BUCKET, name)
+                    deleted += 1
+                except Exception as e:
+                    log.warning("Failed to remove remote %s: %s", name, e)
+                    errors.append(f"remove {name}: {e}")
+
+    log.info(
+        "Workspace sync (mode=%s, cleanup_remote=%s, selected=%d) complete: "
+        "uploaded=%d skipped=%d deleted=%d errors=%d",
+        mode, cleanup_remote, len(selected),
+        uploaded, skipped, deleted, len(errors),
+    )
+    return {
+        "mode": "workspace",
+        "workspace_mode": mode,
+        "cleanup_remote": cleanup_remote,
+        "selected_paths": list(selected),
+        "uploaded": uploaded,
+        "skipped": skipped,
+        "deleted": deleted,
+        "errors": errors,
+    }
+
+
+# ── Backward-compat shim ───────────────────────────────────────────────────
+
+def sync_to_minio() -> dict:
+    """Legacy entry point. State-only. Workspace must be triggered explicitly."""
+    return sync_state_to_minio()
 
 
 # ── Download (Restore from MinIO) ──────────────────────────────────────────
@@ -308,47 +724,114 @@ def _handle_signal(signum, frame):
 
 
 def run_daemon():
-    """Run periodic sync loop."""
+    """Run periodic state-only sync loop.
+
+    Workspace contents are *never* synced from this loop. Workspace upload is
+    a manual, user-triggered action so first-sync against a populated
+    workspace cannot overload MinIO in production clusters.
+    """
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    log.info("Periodic sync daemon started (interval=%ds).", SYNC_INTERVAL)
+    log.info("Periodic state sync daemon started (interval=%ds; workspace excluded).", SYNC_INTERVAL)
     while not _shutdown:
         time.sleep(SYNC_INTERVAL)
         if _shutdown:
             break
         try:
-            sync_to_minio()
+            sync_state_to_minio()
         except Exception as e:
-            log.error("Sync failed: %s", e)
+            log.error("State sync failed: %s", e)
 
     # Final sync on shutdown
-    log.info("Performing final sync before exit...")
+    log.info("Performing final state sync before exit...")
     try:
-        sync_to_minio()
+        sync_state_to_minio()
     except Exception as e:
-        log.error("Final sync failed: %s", e)
+        log.error("Final state sync failed: %s", e)
     log.info("Daemon exiting.")
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: minio_sync.py [restore|sync|daemon]")
-        sys.exit(1)
 
-    cmd = sys.argv[1]
-    if cmd == "restore":
-        restore_from_minio()
-    elif cmd == "sync":
-        sync_to_minio()
-    elif cmd == "daemon":
+def _emit_result(result: dict) -> None:
+    """Print a one-line JSON summary so callers (WebUI subprocess) can parse it."""
+    try:
+        print("RESULT_JSON " + json.dumps(result, ensure_ascii=False), flush=True)
+    except Exception:
+        # Never let a print failure mask the actual sync result.
+        pass
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="minio_sync.py")
+    sub = parser.add_subparsers(dest="cmd")
+
+    sub.add_parser("restore", help="restore Hermes state from MinIO")
+    sub.add_parser("sync-state", help="upload Hermes state allowlist to MinIO")
+    sub.add_parser("sync", help="alias for sync-state (legacy)")
+    sub.add_parser("daemon", help="run periodic state sync (workspace excluded)")
+
+    ws = sub.add_parser("sync-workspace", help="upload workspace tree to MinIO")
+    ws.add_argument(
+        "--mode",
+        choices=WORKSPACE_MODES,
+        default=WORKSPACE_MODE_SAFE,
+        help="safe (default, incremental) or mirror (always overwrite)",
+    )
+    ws.add_argument(
+        "--cleanup-remote",
+        action="store_true",
+        help="when --mode=mirror, delete remote files that no longer exist locally",
+    )
+    ws.add_argument(
+        "--paths",
+        nargs="*",
+        default=None,
+        metavar="REL_PATH",
+        help="optional workspace-relative entries to sync (files or dirs); "
+             "when omitted, the entire workspace is synced",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.cmd:
+        parser.print_usage()
+        return 1
+
+    if args.cmd == "restore":
+        ok = restore_from_minio()
+        _emit_result({"mode": "restore", "ok": bool(ok)})
+        return 0
+    if args.cmd in ("sync-state", "sync"):
+        result = sync_state_to_minio()
+        _emit_result(result)
+        return 0
+    if args.cmd == "sync-workspace":
+        try:
+            result = sync_workspace_to_minio(
+                mode=args.mode,
+                cleanup_remote=bool(args.cleanup_remote),
+                paths=args.paths,
+            )
+        except ValueError as e:
+            log.error("%s", e)
+            _emit_result({"mode": "workspace", "error": str(e)})
+            return 2
+        _emit_result(result)
+        return 0
+    if args.cmd == "daemon":
         run_daemon()
-    else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+        return 0
+
+    parser.print_usage()
+    return 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

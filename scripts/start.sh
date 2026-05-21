@@ -153,10 +153,13 @@ log "Hermes WebUI PID: ${WEBUI_PID}"
 
 log "Startup complete. WebUI: http://localhost:${HERMES_WEBUI_PORT} ; Agent API: http://localhost:${API_SERVER_PORT}/health"
 
-# ── MinIO Periodic Sync Daemon ──────────────────────────────────────────────
+# ── MinIO Periodic Sync Daemon (state allowlist only) ──────────────────────
+# The daemon syncs lightweight Hermes state on an interval. The workspace
+# tree is never synced from this loop; users trigger workspace uploads
+# manually from the WebUI so a large first-sync cannot overload MinIO.
 MINIO_SYNC_PID=""
 if [[ "${MINIO_ENABLED}" == "true" ]]; then
-  log "Starting MinIO periodic sync daemon (interval=${HERMES_MINIO_SYNC_INTERVAL:-300}s)..."
+  log "Starting MinIO state sync daemon (interval=${HERMES_MINIO_SYNC_INTERVAL:-300}s; workspace excluded)..."
   start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py daemon &
   MINIO_SYNC_PID=$!
   log "MinIO sync daemon PID: ${MINIO_SYNC_PID}"
