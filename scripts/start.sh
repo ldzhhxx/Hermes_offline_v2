@@ -85,27 +85,6 @@ export HERMES_WEBUI_SKIP_ONBOARDING="${HERMES_WEBUI_SKIP_ONBOARDING:-1}"
 export HERMES_WEBUI_DEFAULT_WORKSPACE="${HERMES_WEBUI_DEFAULT_WORKSPACE:-${HERMES_WORKSPACE}}"
 export HERMES_BAKED_ENV_FILE="${BAKED_ENV_FILE}"
 
-# Docker bind mounts created by `docker run -v ./data:/home/hermes/.hermes`
-# are commonly root-owned on the host. Start as root, create/chown the mounted
-# directories, then run the actual services as the unprivileged hermes user.
-mkdir -p "${HERMES_HOME}" "${HERMES_WORKSPACE}" "${HERMES_WEBUI_STATE_DIR}"
-if [[ "$(id -u)" == "0" ]]; then
-  log "Fixing ownership for mounted data directories..."
-  chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
-fi
-
-# ── MinIO State Restore (before starting services) ──────────────────────────
-MINIO_ENABLED="${HERMES_MINIO_ENABLED:-false}"
-if [[ "${MINIO_ENABLED}" == "true" ]]; then
-  log "MinIO storage mode enabled. Attempting state restore..."
-  /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py restore || {
-    log "WARNING: MinIO restore failed or no backup found. Starting with current local state."
-  }
-fi
-# ────────────────────────────────────────────────────────────────────────────
-
-cd /opt/hermes-offline
-
 start_as_hermes() {
   local workdir="$1"
   shift
@@ -126,6 +105,39 @@ start_as_hermes() {
     exec "$@"
   fi
 }
+
+if id hermes >/dev/null 2>&1; then
+  export HERMES_RUNTIME_UID="${HERMES_RUNTIME_UID:-$(id -u hermes)}"
+  export HERMES_RUNTIME_GID="${HERMES_RUNTIME_GID:-$(id -g hermes)}"
+else
+  export HERMES_RUNTIME_UID="${HERMES_RUNTIME_UID:-$(id -u)}"
+  export HERMES_RUNTIME_GID="${HERMES_RUNTIME_GID:-$(id -g)}"
+fi
+
+# Docker bind mounts created by `docker run -v ./data:/home/hermes/.hermes`
+# are commonly root-owned on the host. Start as root, create/chown the mounted
+# directories, then run the actual services as the unprivileged hermes user.
+mkdir -p "${HERMES_HOME}" "${HERMES_WORKSPACE}" "${HERMES_WEBUI_STATE_DIR}"
+if [[ "$(id -u)" == "0" ]]; then
+  log "Fixing ownership for mounted data directories..."
+  chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
+fi
+
+# ── MinIO State Restore (before starting services) ──────────────────────────
+MINIO_ENABLED="${HERMES_MINIO_ENABLED:-false}"
+if [[ "${MINIO_ENABLED}" == "true" ]]; then
+  log "MinIO storage mode enabled. Attempting state restore..."
+  start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py restore || {
+    log "WARNING: MinIO restore failed or no backup found. Starting with current local state."
+  }
+  if [[ "$(id -u)" == "0" ]]; then
+    log "Re-fixing ownership after MinIO restore..."
+    chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
+  fi
+fi
+# ────────────────────────────────────────────────────────────────────────────
+
+cd /opt/hermes-offline
 
 log "Hermes home: ${HERMES_HOME}"
 log "Workspace: ${HERMES_WORKSPACE}"

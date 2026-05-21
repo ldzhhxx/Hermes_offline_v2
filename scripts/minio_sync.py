@@ -59,11 +59,13 @@ SYNC_INCLUDES_HOME = [
     "sessions",
     "memories",
     "cron",
-    "logs",
     "sandboxes",
     "webui/models_cache.json",
     "webui/sessions",
 ]
+
+TARGET_UID = int(os.environ.get("HERMES_RUNTIME_UID", str(os.getuid())))
+TARGET_GID = int(os.environ.get("HERMES_RUNTIME_GID", str(os.getgid())))
 
 # Sensitive files to NEVER sync
 SENSITIVE_PATTERNS = {
@@ -106,6 +108,52 @@ def object_key(rel_path: str) -> str:
     if MINIO_PREFIX:
         return f"{MINIO_PREFIX}/{rel_path}"
     return rel_path
+
+
+def is_allowed_home_path(rel_path: str) -> bool:
+    """Return True when a restored HERMES_HOME path is in the sync allowlist."""
+    return any(rel_path == item or rel_path.startswith(item + "/") for item in SYNC_INCLUDES_HOME)
+
+
+def _chown_path(path: Path) -> None:
+    """Best-effort ownership repair for restored paths."""
+    try:
+        os.chown(path, TARGET_UID, TARGET_GID)
+    except OSError:
+        pass
+
+
+def _chown_parent_chain(path: Path, stop_at: Path) -> None:
+    """Best-effort chown for a restored path and its parents under stop_at."""
+    stop_at = stop_at.resolve()
+    current = path.resolve()
+    while True:
+        _chown_path(current)
+        if current == stop_at:
+            break
+        try:
+            current.relative_to(stop_at)
+        except ValueError:
+            break
+        if current.parent == current:
+            break
+        current = current.parent
+
+
+def _download_object_atomically(client, bucket: str, object_name: str, dest: Path) -> None:
+    """Download to a temp file in the target dir, then atomically replace."""
+    fd, tmp_name = tempfile.mkstemp(dir=str(dest.parent), prefix=".minio_restore_")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        client.fget_object(bucket, object_name, str(tmp_path))
+        os.replace(tmp_path, dest)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
 
 
 def safe_sqlite_backup(db_path: Path, dest_path: Path):
@@ -225,18 +273,22 @@ def restore_from_minio():
 
         if rel.startswith("home/"):
             local_rel = rel[5:]  # strip "home/"
-            if is_sensitive(local_rel):
+            if is_sensitive(local_rel) or not is_allowed_home_path(local_rel):
                 continue
             dest = HERMES_HOME / local_rel
+            stop_at = HERMES_HOME
         elif rel.startswith("workspace/"):
             local_rel = rel[10:]  # strip "workspace/"
             dest = HERMES_WORKSPACE / local_rel
+            stop_at = HERMES_WORKSPACE
         else:
             continue
 
         dest.parent.mkdir(parents=True, exist_ok=True)
+        _chown_parent_chain(dest.parent, stop_at)
         try:
-            client.fget_object(MINIO_BUCKET, obj.object_name, str(dest))
+            _download_object_atomically(client, MINIO_BUCKET, obj.object_name, dest)
+            _chown_path(dest)
             restored += 1
         except Exception as e:
             log.warning("Failed to restore %s: %s", obj.object_name, e)
