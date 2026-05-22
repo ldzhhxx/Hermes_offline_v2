@@ -585,6 +585,7 @@ def _quota_from_admin_api(client=None) -> int:
         from minio import MinioAdmin  # type: ignore
     except Exception:  # pragma: no cover - older SDK or missing module
         return 0
+    admin = None
     try:
         admin = MinioAdmin(
             MINIO_ENDPOINT,
@@ -594,22 +595,35 @@ def _quota_from_admin_api(client=None) -> int:
     except Exception:  # pragma: no cover - depends on SDK version
         # Construction signatures differ across SDK versions; treat as no-op.
         return 0
-    fetcher = getattr(admin, "get_bucket_quota", None) or getattr(
-        admin, "bucket_quota_get", None
-    )
-    if fetcher is None:
-        return 0
     try:
-        info = fetcher(MINIO_BUCKET)
-    except Exception as exc:  # pragma: no cover - depends on remote
-        log.debug("bucket_quota admin call failed: %s", exc)
-        return 0
-    quota = 0
-    if isinstance(info, dict):
-        quota = int(info.get("quota") or info.get("size") or 0)
-    else:
-        quota = int(getattr(info, "quota", 0) or 0)
-    return quota if quota > 0 else 0
+        fetcher = getattr(admin, "get_bucket_quota", None) or getattr(
+            admin, "bucket_quota_get", None
+        )
+        if fetcher is None:
+            return 0
+        try:
+            info = fetcher(MINIO_BUCKET)
+        except Exception as exc:  # pragma: no cover - depends on remote
+            log.debug("bucket_quota admin call failed: %s", exc)
+            return 0
+        quota = 0
+        if isinstance(info, dict):
+            quota = int(info.get("quota") or info.get("size") or 0)
+        else:
+            quota = int(getattr(info, "quota", 0) or 0)
+        return quota if quota > 0 else 0
+    finally:
+        # minio 7.2.20: MinioAdmin.__del__ calls self._http.clear() which
+        # raises during interpreter shutdown when module refs are already
+        # gone. Eagerly clear the pool here so __del__ becomes a no-op, and
+        # suppress any error from the clear itself for forward-compat.
+        if admin is not None:
+            try:
+                http = getattr(admin, "_http", None)
+                if http is not None:
+                    http.clear()
+            except Exception:
+                pass
 
 
 def _quota_from_bucket_tag(client=None) -> int:

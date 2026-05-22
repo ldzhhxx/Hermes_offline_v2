@@ -604,6 +604,61 @@ def test_quota_from_bucket_tag_rejects_non_numeric(monkeypatch):
     assert minio_sync._quota_from_bucket_tag() == 0
 
 
+def test_quota_from_admin_api_clears_http_pool(monkeypatch):
+    """The MinioAdmin HTTP pool is eagerly cleared to avoid __del__ crash on 7.2.20."""
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_ENDPOINT", "localhost:9000")
+    monkeypatch.setattr(minio_sync, "MINIO_SECURE", False)
+
+    cleared = []
+
+    class FakeHttp:
+        def clear(self):
+            cleared.append(True)
+
+    class FakeAdmin:
+        def __init__(self, *a, **kw):
+            self._http = FakeHttp()
+
+        def bucket_quota_get(self, bucket):
+            return {"quota": 42 * 1024**3}
+
+    import sys
+    fake_minio_mod = type(sys)("minio")
+    fake_minio_mod.MinioAdmin = FakeAdmin
+    monkeypatch.setitem(sys.modules, "minio", fake_minio_mod)
+
+    result = minio_sync._quota_from_admin_api()
+    assert result == 42 * 1024**3
+    assert cleared, "HTTP pool must be eagerly cleared to prevent __del__ crash"
+
+
+def test_quota_from_admin_api_returns_zero_when_no_fetcher(monkeypatch):
+    """When MinioAdmin has no quota method, return 0 without error."""
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_ENDPOINT", "localhost:9000")
+    monkeypatch.setattr(minio_sync, "MINIO_SECURE", False)
+
+    cleared = []
+
+    class FakeHttp:
+        def clear(self):
+            cleared.append(True)
+
+    class FakeAdminNoMethod:
+        def __init__(self, *a, **kw):
+            self._http = FakeHttp()
+
+    import sys
+    fake_minio_mod = type(sys)("minio")
+    fake_minio_mod.MinioAdmin = FakeAdminNoMethod
+    monkeypatch.setitem(sys.modules, "minio", fake_minio_mod)
+
+    result = minio_sync._quota_from_admin_api()
+    assert result == 0
+    assert cleared, "HTTP pool must be cleared even when no fetcher is found"
+
+
 # ── Blocked extensions filtering ──────────────────────────────────────────
 
 
