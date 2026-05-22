@@ -348,9 +348,16 @@ def test_get_remote_files_when_configured(monkeypatch):
     fake_module.list_remote_files = lambda: [
         {"path": "home/state.db", "size": 100, "last_modified": None},
         {"path": "workspace/a.txt", "size": 50, "last_modified": "2026-01-15T10:00:00+00:00"},
+        {"path": "workspace/sub/b.md", "size": 30, "last_modified": None},
     ]
     monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
     res = bridge.get_remote_files()
     assert res["ok"] is True
+    # Only workspace entries, home/ excluded
     assert len(res["files"]) == 2
-    assert res["files"][0]["path"] == "home/state.db"
+    # Paths have workspace/ prefix stripped for display
+    assert res["files"][0]["path"] == "a.txt"
+    assert res["files"][1]["path"] == "sub/b.md"
+    # Verify no home/ entries leak through
+    paths = [f["path"] for f in res["files"]]
+    assert not any(p.startswith("home/") for p in paths)

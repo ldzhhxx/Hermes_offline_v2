@@ -2273,8 +2273,9 @@ function _formatMinioBytes(bytes) {
 }
 function _formatMinioTimestamp(epoch) {
   if (!epoch) return '';
-  try { return new Date(epoch * 1000).toLocaleString(); }
-  catch (_) { return ''; }
+  try {
+    return new Date(epoch * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  } catch (_) { return ''; }
 }
 function _minioSyncSummary(result) {
   if (!result) return '尚未执行同步';
@@ -2480,7 +2481,7 @@ function _renderMinioSyncPanel(payload) {
         <div class="minio-sync-row">
           <div class="minio-sync-row-info">
             <div class="minio-sync-row-title">Hermes 状态</div>
-            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。守护进程自动同步；此按钮可立即触发一次。</div>
+            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步一次，无需手动操作；此按钮可立即触发一次。${last.state && last.state.finished_at ? '上次同步：' + esc(_formatMinioTimestamp(last.state.finished_at)) : ''}</div>
             ${_renderMinioSyncResult('state', last.state)}
           </div>
           <div class="minio-sync-row-actions">

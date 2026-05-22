@@ -392,3 +392,59 @@ class TestMinioGuidanceAndBlockedExtensions:
         assert ".minio-sync-guidance" in css, (
             "style.css must style the guidance block."
         )
+
+
+class TestMinioTimestampAndIntervalDisplay:
+    """Tests for China-timezone timestamps and auto-sync interval display."""
+
+    def test_timestamp_uses_asia_shanghai(self):
+        js = _read("static/panels.js")
+        assert "Asia/Shanghai" in js, (
+            "_formatMinioTimestamp must use Asia/Shanghai timezone."
+        )
+
+    def test_timestamp_uses_zh_cn_locale(self):
+        js = _read("static/panels.js")
+        assert "zh-CN" in js, (
+            "_formatMinioTimestamp must use zh-CN locale for Chinese formatting."
+        )
+
+    def test_state_row_shows_sync_interval(self):
+        js = _read("static/panels.js")
+        assert "sync_interval_seconds" in js, (
+            "The Hermes state row must display the configured sync interval."
+        )
+        assert "秒自动同步一次" in js, (
+            "The Hermes state row must explain auto-sync in Chinese."
+        )
+
+    def test_state_row_shows_last_sync_time(self):
+        js = _read("static/panels.js")
+        assert "上次同步" in js, (
+            "The Hermes state row must show last sync time in Chinese."
+        )
+
+    def test_backend_exposes_sync_interval(self):
+        """_public_config must include sync_interval_seconds."""
+        import os
+        old = os.environ.get("HERMES_MINIO_SYNC_INTERVAL")
+        try:
+            os.environ["HERMES_MINIO_SYNC_INTERVAL"] = "600"
+            cfg = bridge._public_config()
+            assert cfg["sync_interval_seconds"] == 600
+        finally:
+            if old is None:
+                os.environ.pop("HERMES_MINIO_SYNC_INTERVAL", None)
+            else:
+                os.environ["HERMES_MINIO_SYNC_INTERVAL"] = old
+
+    def test_backend_sync_interval_default(self):
+        """Default sync interval is 300 when env is not set."""
+        import os
+        old = os.environ.pop("HERMES_MINIO_SYNC_INTERVAL", None)
+        try:
+            cfg = bridge._public_config()
+            assert cfg["sync_interval_seconds"] == 300
+        finally:
+            if old is not None:
+                os.environ["HERMES_MINIO_SYNC_INTERVAL"] = old
