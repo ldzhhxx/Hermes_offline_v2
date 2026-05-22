@@ -231,21 +231,30 @@ def _list_workspace_entries() -> list[dict[str, Any]]:
 
 
 def _used_bytes(configured: bool) -> int:
-    """Return the operator's prefix usage in bytes; ``0`` when unknown.
+    """Return the ENTIRE bucket's usage in bytes; ``0`` when unknown.
 
-    Skipped when MinIO is not configured to avoid pointless connection
-    attempts in plain (no-MinIO) container starts.
+    Shows full bucket usage so users understand total consumed storage,
+    not just their prefix. Falls back to prefix-level if bucket-level
+    function is unavailable.
     """
     if not configured:
         return 0
     module = _load_minio_sync_module()
-    if module is None or not hasattr(module, "compute_prefix_used_bytes"):
+    if module is None:
         return 0
-    try:
-        return int(module.compute_prefix_used_bytes())
-    except Exception as exc:  # pragma: no cover - depends on minio runtime
-        logger.debug("compute_prefix_used_bytes failed: %s", exc)
-        return 0
+    # Prefer bucket-level usage for the '已用空间' display
+    if hasattr(module, "compute_bucket_used_bytes"):
+        try:
+            return int(module.compute_bucket_used_bytes())
+        except Exception as exc:  # pragma: no cover
+            logger.debug("compute_bucket_used_bytes failed: %s", exc)
+    # Fallback to prefix-level
+    if hasattr(module, "compute_prefix_used_bytes"):
+        try:
+            return int(module.compute_prefix_used_bytes())
+        except Exception as exc:  # pragma: no cover
+            logger.debug("compute_prefix_used_bytes failed: %s", exc)
+    return 0
 
 
 def _validate_paths_locally(raw_paths) -> list[str]:
@@ -292,16 +301,14 @@ def _record_result(lane: str, payload: dict[str, Any]) -> None:
 
 
 def _snapshot_status() -> dict[str, Any]:
+    """Lightweight status snapshot — no bucket traversal or admin API calls.
+
+    Expensive storage statistics (used_bytes, quota) are served by the
+    separate ``get_usage()`` entry point so they are only computed when the
+    user explicitly clicks "查询用量" in the UI.
+    """
     cfg = _public_config()
     configured, unavailable_reason = _config_completeness(cfg)
-    quota, quota_source = _discover_quota(configured)
-    used = _used_bytes(configured) if configured else 0
-    if quota > 0:
-        remaining = max(0, quota - used)
-    else:
-        # When no quota is configured, "remaining" is unknown. Surface it as
-        # 0 + null so the UI can render "—" instead of an inflated number.
-        remaining = 0
     register_url = _register_url()
     entries = _list_workspace_entries()
     blocked_exts = _blocked_extensions() if configured else []
@@ -313,19 +320,35 @@ def _snapshot_status() -> dict[str, Any]:
         "config": cfg,
         "configured": configured,
         "unavailable_reason": unavailable_reason,
-        "quota_bytes": quota,
-        # Auto-discovery source: 'admin_api' | 'bucket_tag' | 'env' | 'unset'.
-        # The WebUI labels this so operators don't mistake the env-override
-        # fallback for service-derived discovery.
-        "quota_source": quota_source,
-        "used_bytes": used,
-        "remaining_bytes": remaining if quota > 0 else None,
         "register_url": register_url,
         "workspace_entries": entries,
         "blocked_extensions": blocked_exts,
         "script_available": bool(script),
         "running": running,
         "last_result": last,
+    }
+
+
+def _compute_usage() -> dict[str, Any]:
+    """Expensive: queries MinIO for quota + bucket usage.
+
+    Only called on explicit user action (click "查询用量"), never during
+    routine status polling.
+    """
+    cfg = _public_config()
+    configured, _ = _config_completeness(cfg)
+    quota, quota_source = _discover_quota(configured)
+    used = _used_bytes(configured) if configured else 0
+    if quota > 0:
+        remaining = max(0, quota - used)
+    else:
+        remaining = 0
+    return {
+        "ok": True,
+        "quota_bytes": quota,
+        "quota_source": quota_source,
+        "used_bytes": used,
+        "remaining_bytes": remaining if quota > 0 else None,
     }
 
 
@@ -440,6 +463,27 @@ def _spawn_lane(lane: str, args: list[str]) -> dict[str, Any]:
 
 def get_status() -> dict[str, Any]:
     return _snapshot_status()
+
+
+def get_usage() -> dict[str, Any]:
+    """Return storage usage + quota — expensive, only called on user click."""
+    return _compute_usage()
+
+
+def get_remote_files() -> dict[str, Any]:
+    """List files currently stored in MinIO under the configured prefix."""
+    cfg = _public_config()
+    configured, unavailable_reason = _config_completeness(cfg)
+    if not configured:
+        return {"ok": False, "error": unavailable_reason or "MinIO 未配置", "files": []}
+    module = _load_minio_sync_module()
+    if module is None or not hasattr(module, "list_remote_files"):
+        return {"ok": False, "error": "list_remote_files 不可用", "files": []}
+    try:
+        files = list(module.list_remote_files())
+        return {"ok": True, "files": files}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc), "files": []}
 
 
 def trigger_state_sync() -> dict[str, Any]:
