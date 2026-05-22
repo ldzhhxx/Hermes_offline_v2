@@ -602,3 +602,107 @@ def test_quota_from_bucket_tag_rejects_non_numeric(monkeypatch):
     fake = _QuotaDiscoveryClient(tags={"hermes-quota-bytes": "not-a-number"})
     monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
     assert minio_sync._quota_from_bucket_tag() == 0
+
+
+# ── Blocked extensions filtering ──────────────────────────────────────────
+
+
+def test_parse_blocked_extensions_normalizes():
+    result = minio_sync._parse_blocked_extensions(" .DOC , docx, .PPT ,xlsx ")
+    assert result == frozenset({"doc", "docx", "ppt", "xlsx"})
+
+
+def test_parse_blocked_extensions_empty_string():
+    assert minio_sync._parse_blocked_extensions("") == frozenset()
+
+
+def test_get_blocked_extensions_default(monkeypatch):
+    monkeypatch.delenv("HERMES_MINIO_BLOCKED_EXTENSIONS", raising=False)
+    exts = minio_sync.get_blocked_extensions()
+    assert "doc" in exts
+    assert "docx" in exts
+    assert "pptx" in exts
+    assert "xlsx" in exts
+
+
+def test_get_blocked_extensions_from_env(monkeypatch):
+    monkeypatch.setenv("HERMES_MINIO_BLOCKED_EXTENSIONS", "pdf, .ZIP")
+    exts = minio_sync.get_blocked_extensions()
+    assert exts == frozenset({"pdf", "zip"})
+    assert "doc" not in exts
+
+
+def test_get_blocked_extensions_env_empty_disables(monkeypatch):
+    """Setting the env var to empty string disables all blocking."""
+    monkeypatch.setenv("HERMES_MINIO_BLOCKED_EXTENSIONS", "")
+    exts = minio_sync.get_blocked_extensions()
+    assert exts == frozenset()
+
+
+def test_is_blocked_extension():
+    # Using default
+    assert minio_sync.is_blocked_extension("report.docx")
+    assert minio_sync.is_blocked_extension("slides.PPTX")
+    assert minio_sync.is_blocked_extension("data.xlsx")
+    assert not minio_sync.is_blocked_extension("readme.txt")
+    assert not minio_sync.is_blocked_extension("code.py")
+
+
+def test_workspace_sync_blocks_forbidden_extensions(tmp_path, monkeypatch):
+    workspace = _setup_workspace(tmp_path, monkeypatch, {
+        "report.docx": "word doc",
+        "slides.pptx": "ppt file",
+        "notes.txt": "plain text",
+        "sub/data.xlsx": "spreadsheet",
+    })
+    monkeypatch.delenv("HERMES_MINIO_BLOCKED_EXTENSIONS", raising=False)
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    result = minio_sync.sync_workspace_to_minio(mode="safe")
+    uploaded_keys = [k for k, _ in fake.uploaded]
+    assert "workspace/notes.txt" in uploaded_keys
+    assert all("docx" not in k and "pptx" not in k and "xlsx" not in k
+               for k in uploaded_keys)
+    assert result["blocked"] == 3
+    assert sorted(result["blocked_details"]) == [
+        "report.docx", "slides.pptx", "sub/data.xlsx"
+    ]
+    assert result["uploaded"] == 1
+
+
+def test_workspace_sync_selected_paths_honors_blocked(tmp_path, monkeypatch):
+    """Selected-path sync must also apply blocked extension filter."""
+    workspace = _setup_workspace(tmp_path, monkeypatch, {
+        "proj/budget.xls": "excel",
+        "proj/readme.md": "markdown",
+    })
+    monkeypatch.delenv("HERMES_MINIO_BLOCKED_EXTENSIONS", raising=False)
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    result = minio_sync.sync_workspace_to_minio(mode="safe", paths=["proj"])
+    uploaded_keys = [k for k, _ in fake.uploaded]
+    assert "workspace/proj/readme.md" in uploaded_keys
+    assert all("xls" not in k for k in uploaded_keys)
+    assert result["blocked"] == 1
+    assert result["blocked_details"] == ["proj/budget.xls"]
+
+
+def test_workspace_sync_custom_blocked_via_env(tmp_path, monkeypatch):
+    """Custom env override replaces default blocked list."""
+    workspace = _setup_workspace(tmp_path, monkeypatch, {
+        "a.pdf": "pdf file",
+        "b.docx": "word file",
+        "c.txt": "text",
+    })
+    monkeypatch.setenv("HERMES_MINIO_BLOCKED_EXTENSIONS", "pdf")
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    result = minio_sync.sync_workspace_to_minio(mode="safe")
+    uploaded_keys = [k for k, _ in fake.uploaded]
+    assert "workspace/a.pdf" not in uploaded_keys
+    assert "workspace/b.docx" in uploaded_keys  # not blocked when custom list
+    assert "workspace/c.txt" in uploaded_keys
+    assert result["blocked"] == 1
