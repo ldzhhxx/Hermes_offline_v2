@@ -365,6 +365,7 @@ docker build -f Dockerfile.iterative \
 | `HERMES_MINIO_PREFIX` | 对象前缀（如 `user-liudezheng/diagent`） | `""` |
 | `HERMES_MINIO_SECURE` | 是否使用 HTTPS | `false` |
 | `HERMES_MINIO_SYNC_INTERVAL` | 同步间隔（秒） | `300` |
+| `HERMES_MINIO_BLOCKED_EXTENSIONS` | 工作区上传时阻止的文件扩展名（逗号分隔，不区分大小写，前导点可选）。设为空字符串可禁用过滤 | `doc,docx,ppt,pptx,xls,xlsx` |
 | `HERMES_MINIO_QUOTA_BYTES` | **回退** 存储配额（字节，0 表示未配置） — 仅当 MinIO 服务端无法自动发现时使用 | `0` |
 | `HERMES_MINIO_REGISTER_URL` | 用户未启用 MinIO 时显示的注册 / 申请存储链接 | — |
 

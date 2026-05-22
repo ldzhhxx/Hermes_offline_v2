@@ -15,6 +15,9 @@ Environment variables:
   HERMES_MINIO_PREFIX        - Object prefix (e.g. user-liudezheng/diagent)
   HERMES_MINIO_SECURE        - "true" for HTTPS (default: "false")
   HERMES_MINIO_SYNC_INTERVAL - State sync interval in seconds (default: 300)
+  HERMES_MINIO_BLOCKED_EXTENSIONS - Comma-separated file extensions to block
+                               from workspace uploads (default: doc,docx,ppt,
+                               pptx,xls,xlsx). Leading dots optional.
 
 CLI:
   minio_sync.py restore
@@ -98,6 +101,39 @@ SENSITIVE_PATTERNS = {
 WORKSPACE_MODE_SAFE = "safe"      # incremental: skip files that match remote
 WORKSPACE_MODE_MIRROR = "mirror"  # always overwrite remote with local
 WORKSPACE_MODES = (WORKSPACE_MODE_SAFE, WORKSPACE_MODE_MIRROR)
+
+# Blocked file extensions for workspace uploads (configurable via env).
+# Comma-separated, case-insensitive, leading dots optional.
+_DEFAULT_BLOCKED_EXTENSIONS = "doc,docx,ppt,pptx,xls,xlsx"
+
+
+def _parse_blocked_extensions(raw: str) -> frozenset[str]:
+    """Parse a comma-separated extension list into a normalized frozenset.
+
+    Accepts values with or without leading dots, trims whitespace, lowercases.
+    Returns extensions *without* leading dots for comparison.
+    """
+    exts: set[str] = set()
+    for part in raw.split(","):
+        part = part.strip().lower().lstrip(".")
+        if part:
+            exts.add(part)
+    return frozenset(exts)
+
+
+def get_blocked_extensions() -> frozenset[str]:
+    """Return the effective set of blocked workspace upload extensions."""
+    raw = os.environ.get("HERMES_MINIO_BLOCKED_EXTENSIONS", _DEFAULT_BLOCKED_EXTENSIONS)
+    return _parse_blocked_extensions(raw)
+
+
+def is_blocked_extension(filename: str) -> bool:
+    """Return True if the file's extension is in the blocked set."""
+    blocked = get_blocked_extensions()
+    if not blocked:
+        return False
+    ext = Path(filename).suffix.lower().lstrip(".")
+    return ext in blocked
 
 
 def is_sensitive(rel_path: str) -> bool:
@@ -706,6 +742,8 @@ def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
 
     uploaded = 0
     skipped = 0
+    blocked = 0
+    blocked_details: list[str] = []
     deleted = 0
     errors: list[str] = []
     local_keys: set[str] = set()
@@ -724,6 +762,11 @@ def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
                 if fpath.is_file()
             )
         for rel, fpath in file_iter:
+            if is_blocked_extension(rel):
+                blocked += 1
+                blocked_details.append(rel)
+                log.debug("Blocked by extension filter: %s", rel)
+                continue
             obj = object_key(f"workspace/{rel}")
             local_keys.add(obj)
             if mode == WORKSPACE_MODE_SAFE:
@@ -797,9 +840,9 @@ def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
 
     log.info(
         "Workspace sync (mode=%s, cleanup_remote=%s, selected=%d) complete: "
-        "uploaded=%d skipped=%d deleted=%d errors=%d",
+        "uploaded=%d skipped=%d blocked=%d deleted=%d errors=%d",
         mode, cleanup_remote, len(selected),
-        uploaded, skipped, deleted, len(errors),
+        uploaded, skipped, blocked, deleted, len(errors),
     )
     return {
         "mode": "workspace",
@@ -808,6 +851,8 @@ def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
         "selected_paths": list(selected),
         "uploaded": uploaded,
         "skipped": skipped,
+        "blocked": blocked,
+        "blocked_details": blocked_details,
         "deleted": deleted,
         "errors": errors,
     }
