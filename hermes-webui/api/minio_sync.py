@@ -471,7 +471,7 @@ def get_usage() -> dict[str, Any]:
 
 
 def get_remote_files() -> dict[str, Any]:
-    """List files currently stored in MinIO under the configured prefix."""
+    """List workspace files currently stored in MinIO (excludes home/ state)."""
     cfg = _public_config()
     configured, unavailable_reason = _config_completeness(cfg)
     if not configured:
@@ -480,7 +480,13 @@ def get_remote_files() -> dict[str, Any]:
     if module is None or not hasattr(module, "list_remote_files"):
         return {"ok": False, "error": "list_remote_files 不可用", "files": []}
     try:
-        files = list(module.list_remote_files())
+        all_files = list(module.list_remote_files())
+        # Only return workspace entries; strip the "workspace/" prefix for display
+        files = [
+            {**f, "path": f["path"][len("workspace/"):]}
+            for f in all_files
+            if f.get("path", "").startswith("workspace/")
+        ]
         return {"ok": True, "files": files}
     except Exception as exc:
         return {"ok": False, "error": str(exc), "files": []}
