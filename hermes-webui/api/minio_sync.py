@@ -163,14 +163,14 @@ def _config_completeness(cfg: dict[str, Any]) -> tuple[bool, str | None]:
     are set or not in the status payload.
     """
     if not cfg["enabled"]:
-        return False, "MinIO sync is not enabled for this container"
+        return False, "此容器未启用 MinIO 同步"
     missing = []
     if not cfg["endpoint"]:
         missing.append("endpoint")
     if not cfg["bucket"]:
         missing.append("bucket")
     if missing:
-        return False, "Missing MinIO configuration: " + ", ".join(missing)
+        return False, "缺少 MinIO 配置项: " + ", ".join(missing)
     return True, None
 
 
@@ -206,6 +206,17 @@ def _load_minio_sync_module():
         logger.debug("Failed to load minio_sync module for metadata: %s", exc)
         _minio_sync_module_load_failed = True
         return None
+
+
+def _blocked_extensions() -> list[str]:
+    """Return the currently configured blocked upload extensions as a sorted list."""
+    module = _load_minio_sync_module()
+    if module is None or not hasattr(module, "get_blocked_extensions"):
+        return []
+    try:
+        return sorted(module.get_blocked_extensions())
+    except Exception:
+        return []
 
 
 def _list_workspace_entries() -> list[dict[str, Any]]:
@@ -293,6 +304,7 @@ def _snapshot_status() -> dict[str, Any]:
         remaining = 0
     register_url = _register_url()
     entries = _list_workspace_entries()
+    blocked_exts = _blocked_extensions() if configured else []
     with _lock:
         running = dict(_running)
         last = {lane: dict(v) if v else None for lane, v in _last_result.items()}
@@ -310,6 +322,7 @@ def _snapshot_status() -> dict[str, Any]:
         "remaining_bytes": remaining if quota > 0 else None,
         "register_url": register_url,
         "workspace_entries": entries,
+        "blocked_extensions": blocked_exts,
         "script_available": bool(script),
         "running": running,
         "last_result": last,
@@ -393,10 +406,10 @@ def _spawn_lane(lane: str, args: list[str]) -> dict[str, Any]:
     if not configured:
         return {
             "ok": False,
-            "error": unavailable_reason or "MinIO sync is not configured",
+            "error": unavailable_reason or "MinIO 同步未配置",
         }
     if _is_running(lane):
-        return {"ok": False, "error": f"a {lane} sync is already running"}
+        return {"ok": False, "error": f"{lane} 同步正在进行中"}
 
     started_at = time.time()
 
@@ -441,14 +454,14 @@ def trigger_workspace_sync(
     """Validate options then dispatch a workspace sync run."""
     mode = (mode or "safe").strip().lower()
     if mode not in ("safe", "mirror"):
-        return {"ok": False, "error": "mode must be 'safe' or 'mirror'"}
+        return {"ok": False, "error": "mode 必须为 'safe' 或 'mirror'"}
     if cleanup_remote and mode != "mirror":
-        return {"ok": False, "error": "cleanup_remote requires mode='mirror'"}
+        return {"ok": False, "error": "cleanup_remote 需要 mode='mirror'"}
 
     try:
         validated_paths = _validate_paths_locally(paths)
     except ValueError as exc:
-        return {"ok": False, "error": f"invalid path selection: {exc}"}
+        return {"ok": False, "error": f"路径选择无效: {exc}"}
 
     args = ["sync-workspace", "--mode", mode]
     if cleanup_remote:

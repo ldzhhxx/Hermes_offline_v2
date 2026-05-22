@@ -193,9 +193,9 @@ class TestUnavailableVsConfiguredPaths:
         monkeypatch.delenv("HERMES_MINIO_BUCKET", raising=False)
         status = bridge.get_status()
         assert status["configured"] is False
-        reason = (status["unavailable_reason"] or "").lower()
-        assert "missing" in reason
-        assert "endpoint" in reason or "bucket" in reason
+        reason = (status["unavailable_reason"] or "")
+        assert "缺少" in reason or "missing" in reason.lower()
+        assert "endpoint" in reason.lower() or "bucket" in reason.lower()
 
     def test_configured_payload_renders_with_workspace_entries(
         self, monkeypatch
@@ -330,11 +330,49 @@ class TestQuotaSourceLabelMarkup:
             "Renderer must emit a `.minio-sync-quota-source` block so the "
             "UI can surface where the displayed quota came from."
         )
-        assert "operator override" in js.lower(), (
-            "Env-derived quota must be labeled as 'operator override' so "
+        assert "运维覆盖" in js, (
+            "Env-derived quota must be labeled as operator override (运维覆盖) so "
             "operators can tell it apart from auto-discovery."
         )
-        assert "auto-discovered" in js.lower(), (
+        assert "自动发现" in js, (
             "Discovered quota (admin API / bucket tag) must be labeled "
-            "as auto-discovered."
+            "as auto-discovered (自动发现)."
+        )
+
+
+class TestMinioGuidanceAndBlockedExtensions:
+    """Tests for the inline guidance and blocked-extension visibility."""
+
+    def test_panels_js_contains_guidance_function(self):
+        js = _read("static/panels.js")
+        assert "_renderMinioGuidance" in js, (
+            "panels.js must define _renderMinioGuidance for inline help."
+        )
+
+    def test_guidance_text_mentions_key_rules(self):
+        js = _read("static/panels.js")
+        # Key guidance items in Chinese
+        assert "自动定时同步" in js or "自动同步" in js, "Should mention auto state sync"
+        assert "不会自动同步" in js, "Should explain workspace is manual only"
+        assert "安全模式" in js, "Should explain safe mode"
+        assert "镜像模式" in js, "Should explain mirror mode"
+        assert "不会删除您的本地文件" in js, "Should reassure local files are safe"
+        assert "禁传扩展名" in js or "禁传" in js, "Should mention blocked extensions"
+
+    def test_sync_summary_shows_blocked_count(self):
+        js = _read("static/panels.js")
+        assert "因扩展名被禁传" in js, (
+            "Sync summary should explain blocked files in Chinese."
+        )
+
+    def test_guidance_renders_blocked_ext_list_from_payload(self):
+        js = _read("static/panels.js")
+        assert "blocked_extensions" in js, (
+            "panels.js must read blocked_extensions from the status payload."
+        )
+
+    def test_css_has_guidance_styles(self):
+        css = _read("static/style.css")
+        assert ".minio-sync-guidance" in css, (
+            "style.css must style the guidance block."
         )

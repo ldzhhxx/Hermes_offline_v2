@@ -2275,27 +2275,25 @@ function _formatMinioTimestamp(epoch) {
   catch (_) { return ''; }
 }
 function _minioSyncSummary(result) {
-  if (!result) return 'No sync attempted yet.';
-  if (result.error && !result.ok) return `Error: ${result.error}`;
+  if (!result) return '尚未执行同步';
+  if (result.error && !result.ok) return `错误: ${result.error}`;
   const d = result.details || {};
   const bits = [];
-  if (typeof d.uploaded === 'number') bits.push(`${d.uploaded} uploaded`);
-  if (typeof d.skipped === 'number' && d.skipped > 0) bits.push(`${d.skipped} skipped`);
-  if (typeof d.deleted === 'number' && d.deleted > 0) bits.push(`${d.deleted} deleted`);
-  if (Array.isArray(d.selected_paths) && d.selected_paths.length) {
-    bits.push(`${d.selected_paths.length} selected`);
-  }
+  if (typeof d.uploaded === 'number') bits.push(`${d.uploaded} 个文件已上传`);
+  if (typeof d.skipped === 'number' && d.skipped > 0) bits.push(`${d.skipped} 个未变更已跳过`);
+  if (typeof d.blocked === 'number' && d.blocked > 0) bits.push(`${d.blocked} 个因扩展名被禁传`);
+  if (typeof d.deleted === 'number' && d.deleted > 0) bits.push(`${d.deleted} 个远端文件已删除`);
   const errCount = Array.isArray(d.errors) ? d.errors.length : 0;
-  if (errCount > 0) bits.push(`${errCount} error${errCount === 1 ? '' : 's'}`);
+  if (errCount > 0) bits.push(`${errCount} 个错误`);
   if (typeof result.duration_seconds === 'number') {
-    bits.push(`${result.duration_seconds.toFixed(1)}s`);
+    bits.push(`耗时 ${result.duration_seconds.toFixed(1)}s`);
   }
-  if (!bits.length) return result.ok ? 'Completed.' : 'Failed.';
+  if (!bits.length) return result.ok ? '已完成' : '失败';
   return bits.join(' · ');
 }
 function _renderMinioSyncResult(lane, result) {
   if (!result) {
-    return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}">No ${lane} sync attempted yet.</div>`;
+    return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}">尚未执行 ${lane} 同步</div>`;
   }
   const klass = result.ok ? 'ok' : 'err';
   const ts = _formatMinioTimestamp(result.finished_at);
@@ -2310,7 +2308,7 @@ function _renderMinioWorkspaceEntries(payload) {
     ? payload.workspace_entries
     : [];
   if (!entries.length) {
-    return `<div class="minio-sync-empty">${esc('Workspace is empty — nothing to sync.')}</div>`;
+    return `<div class="minio-sync-empty">${esc('工作区为空 — 无内容可同步')}</div>`;
   }
   // Drop selection entries whose path no longer exists on disk so the
   // summary stays accurate after files were moved/deleted between renders.
@@ -2338,30 +2336,47 @@ function _renderMinioWorkspaceEntries(payload) {
     </label>`;
   }).join('');
   return `<div class="minio-ws-toolbar">
-    <button type="button" class="minio-ws-toolbar-btn" id="minioWsSelectAll">Select all</button>
-    <button type="button" class="minio-ws-toolbar-btn" id="minioWsClear">Clear</button>
+    <button type="button" class="minio-ws-toolbar-btn" id="minioWsSelectAll">全选</button>
+    <button type="button" class="minio-ws-toolbar-btn" id="minioWsClear">清除</button>
     <span class="minio-ws-toolbar-summary" id="minioWsSummary"></span>
   </div>
   <div class="minio-ws-list" id="minioWsList">${rows}</div>`;
 }
+function _renderMinioGuidance(payload) {
+  const blocked = Array.isArray(payload.blocked_extensions) && payload.blocked_extensions.length
+    ? payload.blocked_extensions.map(e => '.' + e).join('、')
+    : null;
+  const blockedLine = blocked
+    ? `<li>当前禁传扩展名：<code>${esc(blocked)}</code>（这些文件不会上传到 MinIO）</li>`
+    : `<li>部分文件扩展名可能被管理员禁止上传</li>`;
+  return `<details class="minio-sync-guidance"><summary>同步规则说明</summary><ul>
+    <li><b>Hermes 状态</b>（技能、会话等）会自动定时同步，无需手动操作</li>
+    <li><b>工作区文件</b>不会自动同步 — 需要您手动勾选后点击"同步所选"</li>
+    <li><b>安全模式</b>：仅上传新增或有变化的文件（增量上传，不影响远端已有文件）</li>
+    <li><b>镜像模式</b>：用本地版本覆盖远端，适合确保远端与本地完全一致</li>
+    <li>勾选"删除远端多余文件"后，仅删除您所选范围内远端有但本地没有的文件</li>
+    ${blockedLine}
+    <li>同步不会删除您的本地文件 — 本地内容始终安全</li>
+  </ul></details>`;
+}
 function _renderMinioUnavailableCard(payload) {
   const reason = (payload && payload.unavailable_reason)
-    || 'MinIO sync is not enabled for this account.';
+    || '此账户未启用 MinIO 同步';
   const url = (payload && payload.register_url) || '';
   // Validate the URL scheme so a misconfigured env variable can't smuggle
   // javascript:/data: into the link target.
   const safeUrl = /^https?:\/\//i.test(url) ? url : '';
   const cta = safeUrl
-    ? `<a class="minio-sync-register-link" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">Register / Request storage →</a>`
+    ? `<a class="minio-sync-register-link" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">注册 / 申请存储空间 →</a>`
     : '';
   return `
-    <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO sync controls">
+    <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO 同步控制">
       <div class="minio-sync-head">
         <div>
-          <div class="insights-card-title">MinIO sync</div>
-          <div class="minio-sync-sub">${esc('This account does not currently have MinIO sync enabled.')}</div>
+          <div class="insights-card-title">MinIO 同步</div>
+          <div class="minio-sync-sub">${esc('此账户当前未启用 MinIO 同步')}</div>
         </div>
-        <span class="minio-sync-status minio-sync-status--off"><span class="minio-sync-dot" aria-hidden="true"></span>Unavailable</span>
+        <span class="minio-sync-status minio-sync-status--off"><span class="minio-sync-dot" aria-hidden="true"></span>不可用</span>
       </div>
       <div class="minio-sync-unavailable">
         <div class="minio-sync-unavailable-text">${esc(reason)}</div>
@@ -2382,7 +2397,7 @@ function _renderMinioSyncPanel(payload) {
   const stateRunning = !!running.state;
   const wsRunning = !!running.workspace;
   const target = `${esc(cfg.endpoint || '—')}/${esc(cfg.bucket || '—')}${cfg.prefix ? '/' + esc(cfg.prefix) : ''}`;
-  const intervalLine = `Daemon syncs Hermes state every ${Math.max(1, cfg.sync_interval_seconds || 0)}s. Workspace upload is manual only.`;
+  const intervalLine = `守护进程每 ${Math.max(1, cfg.sync_interval_seconds || 0)} 秒自动同步 Hermes 状态。工作区上传需手动触发。`;
 
   const quota = Number(payload.quota_bytes) || 0;
   const used = Number(payload.used_bytes) || 0;
@@ -2397,42 +2412,43 @@ function _renderMinioSyncPanel(payload) {
   // the user explicitly asked us not to treat env quota as the primary model.
   const quotaSource = String((payload.quota_source || 'unset')).toLowerCase();
   const quotaSourceLabel = (quota > 0)
-    ? (quotaSource === 'admin_api' ? 'auto-discovered (MinIO admin API)'
-       : quotaSource === 'bucket_tag' ? 'auto-discovered (bucket tag)'
-       : quotaSource === 'env' ? 'operator override (HERMES_MINIO_QUOTA_BYTES)'
-       : 'unknown source')
+    ? (quotaSource === 'admin_api' ? '自动发现（MinIO 管理 API）'
+       : quotaSource === 'bucket_tag' ? '自动发现（存储桶标签）'
+       : quotaSource === 'env' ? '运维覆盖（HERMES_MINIO_QUOTA_BYTES）'
+       : '未知来源')
     : '';
   const quotaBlock = quota > 0
     ? `<div class="minio-sync-quota">
         <div class="minio-sync-quota-row">
-          <span class="minio-sync-quota-label">Used</span>
+          <span class="minio-sync-quota-label">已用</span>
           <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))}${usedPct ? ` (${usedPct}%)` : ''}</span>
         </div>
         <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
         <div class="minio-sync-quota-row">
-          <span class="minio-sync-quota-label">Remaining</span>
+          <span class="minio-sync-quota-label">剩余</span>
           <span class="minio-sync-quota-value">${esc(remaining === null ? '—' : _formatMinioBytes(remaining))}</span>
         </div>
         <div class="minio-sync-quota-source" data-quota-source="${esc(quotaSource)}">${esc(quotaSourceLabel)}</div>
       </div>`
     : `<div class="minio-sync-quota minio-sync-quota--unset">
          <div class="minio-sync-quota-row">
-           <span class="minio-sync-quota-label">Used</span>
+           <span class="minio-sync-quota-label">已用</span>
            <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))}</span>
          </div>
          <div class="minio-sync-quota-row">
-           <span class="minio-sync-quota-label">Quota</span>
-           <span class="minio-sync-quota-value">Auto-discovery returned no quota</span>
+           <span class="minio-sync-quota-label">配额</span>
+           <span class="minio-sync-quota-value">自动发现未返回配额信息</span>
          </div>
-         <div class="minio-sync-quota-source" data-quota-source="unset">Operator may set HERMES_MINIO_QUOTA_BYTES as a fallback</div>
+         <div class="minio-sync-quota-source" data-quota-source="unset">运维可设置 HERMES_MINIO_QUOTA_BYTES 作为兜底</div>
        </div>`;
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
+  const guidanceBlock = _renderMinioGuidance(payload);
 
   return `
-    <section class="insights-card minio-sync-panel" id="minioSyncPanel" aria-label="MinIO sync controls">
+    <section class="insights-card minio-sync-panel" id="minioSyncPanel" aria-label="MinIO 同步控制">
       <div class="minio-sync-head">
         <div>
-          <div class="insights-card-title">MinIO sync</div>
+          <div class="insights-card-title">MinIO 同步</div>
           <div class="minio-sync-sub">${esc(intervalLine)}</div>
         </div>
         <span class="minio-sync-status" id="minioSyncStatus"><span class="minio-sync-dot" aria-hidden="true"></span>${cfg.secure ? 'HTTPS' : 'HTTP'} · ${esc(target)}</span>
@@ -2440,46 +2456,48 @@ function _renderMinioSyncPanel(payload) {
 
       ${quotaBlock}
 
+      ${guidanceBlock}
+
       <div class="minio-sync-row">
         <div class="minio-sync-row-info">
-          <div class="minio-sync-row-title">Hermes state</div>
-          <div class="minio-sync-row-sub">Skills, sessions, memories, kanban, state.db. Synced automatically; this button forces an immediate run.</div>
+          <div class="minio-sync-row-title">Hermes 状态</div>
+          <div class="minio-sync-row-sub">技能、会话、记忆、看板、state.db 等。自动同步；此按钮可立即触发一次。</div>
           ${_renderMinioSyncResult('state', last.state)}
         </div>
         <div class="minio-sync-row-actions">
           <button type="button" class="minio-sync-btn" id="minioSyncStateBtn" onclick="triggerMinioStateSync()" ${stateRunning ? 'disabled' : ''}>
-            ${stateRunning ? 'Syncing…' : 'Sync state now'}
+            ${stateRunning ? '同步中…' : '立即同步状态'}
           </button>
         </div>
       </div>
 
       <div class="minio-sync-row minio-sync-row--workspace">
         <div class="minio-sync-row-info">
-          <div class="minio-sync-row-title">Workspace</div>
-          <div class="minio-sync-row-sub">User files under <code>workspace/</code>. Manual only — pick the items you want to upload.</div>
+          <div class="minio-sync-row-title">工作区</div>
+          <div class="minio-sync-row-sub"><code>workspace/</code> 下的用户文件。仅手动上传 — 请勾选需要同步的项目。</div>
           ${entriesBlock}
           <div class="minio-sync-options">
             <label class="minio-sync-option">
-              <span>Mode</span>
+              <span>模式</span>
               <select id="minioWorkspaceMode" ${wsRunning ? 'disabled' : ''}>
-                <option value="safe" selected>Safe (skip unchanged)</option>
-                <option value="mirror">Mirror (always overwrite)</option>
+                <option value="safe" selected>安全（跳过未变更文件）</option>
+                <option value="mirror">镜像（始终覆盖）</option>
               </select>
             </label>
             <label class="minio-sync-option minio-sync-option--danger" id="minioCleanupOption" hidden>
               <input type="checkbox" id="minioCleanupRemote" ${wsRunning ? 'disabled' : ''}>
-              <span>Delete remote files that no longer exist locally (within selected scope)</span>
+              <span>删除远端已不存在于本地的文件（仅限所选范围内）</span>
             </label>
           </div>
           <div class="minio-sync-warn" id="minioMirrorWarn" hidden>
-            Mirror mode overwrites every selected remote file with the local version. With “delete remote extras” checked, it also <strong>removes</strong> remote files missing locally — but only inside the paths you selected.
+            镜像模式将用本地版本覆盖所有已选择的远端文件。 With 「删除远端多余文件」 后，还会<strong>移除</strong>本地不存在但远端存在的文件  — 但仅限于您所选的路径范围。
           </div>
           <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
           ${_renderMinioSyncResult('workspace', last.workspace)}
         </div>
         <div class="minio-sync-row-actions">
           <button type="button" class="minio-sync-btn" id="minioSyncWorkspaceBtn" onclick="triggerMinioWorkspaceSync()" ${wsRunning ? 'disabled' : ''}>
-            ${wsRunning ? 'Syncing…' : 'Sync selected'}
+            ${wsRunning ? '同步中…' : '同步所选'}
           </button>
         </div>
       </div>
@@ -2553,9 +2571,9 @@ function _refreshMinioWsSummary() {
     count++;
   }
   if (count === 0) {
-    summaryEl.textContent = 'Nothing selected';
+    summaryEl.textContent = '未选择任何项目';
   } else {
-    summaryEl.textContent = `${count} selected · ${_formatMinioBytes(totalSize)}`;
+    summaryEl.textContent = `${count} 项已选 · ${_formatMinioBytes(totalSize)}`;
   }
   // Quota guard: block sync if the selection alone would exceed the
   // remaining quota. The plan calls this out as a "prefer blocking" case.
@@ -2564,7 +2582,7 @@ function _refreshMinioWsSummary() {
   const remaining = payload.remaining_bytes;
   if (typeof remaining === 'number' && remaining >= 0 && totalSize > remaining) {
     blocked = true;
-    warnText = `Selection (${_formatMinioBytes(totalSize)}) exceeds remaining quota (${_formatMinioBytes(remaining)}). Sync is blocked until you reduce the selection or free space.`;
+    warnText = `所选内容（${_formatMinioBytes(totalSize)}）超出剩余配额（${_formatMinioBytes(remaining)}）。请减少选择或释放空间后再同步。`;
   }
   if (warnEl) {
     warnEl.hidden = !warnText;
@@ -2637,13 +2655,13 @@ async function triggerMinioStateSync() {
   try {
     const res = await api('/api/minio/sync/state', {method:'POST', body: JSON.stringify({})});
     if (res && res.ok) {
-      if (typeof showToast === 'function') showToast('State sync started');
+      if (typeof showToast === 'function') showToast('状态同步已启动');
       _pollMinioSyncWhileRunning();
     } else if (typeof showToast === 'function') {
-      showToast(res && res.error ? res.error : 'Sync failed', 'error');
+      showToast(res && res.error ? res.error : '同步失败', 'error');
     }
   } catch (e) {
-    if (typeof showToast === 'function') showToast(e.message || 'Sync failed', 'error');
+    if (typeof showToast === 'function') showToast(e.message || '同步失败', 'error');
   } finally {
     refreshMinioSyncStatus();
   }
@@ -2655,19 +2673,19 @@ async function triggerMinioWorkspaceSync() {
   const cleanup = !!(cleanupBox && cleanupBox.checked);
   const paths = Array.from(_minioWorkspaceSelection);
   if (!paths.length) {
-    if (typeof showToast === 'function') showToast('Select at least one item to sync', 'error');
+    if (typeof showToast === 'function') showToast('请至少选择一个项目进行同步', 'error');
     return;
   }
   if (mode === 'mirror') {
     const msg = cleanup
-      ? `Mirror mode WITH cleanup: every selected workspace file will be overwritten on MinIO and remote-only files within the selected scope will be deleted. Continue with ${paths.length} item(s)?`
-      : `Mirror mode: every selected workspace file will be overwritten on MinIO. Continue with ${paths.length} item(s)?`;
+      ? `镜像模式（含清理）：所有已选择的工作区文件将覆盖 MinIO 上的版本，且所选范围内远端独有的文件将被删除。确认继续同步 ${paths.length} 个项目？`
+      : `镜像模式：所有已选择的工作区文件将覆盖 MinIO 上的版本。确认继续同步 ${paths.length} 个项目？`;
     let ok = true;
     if (typeof showConfirmDialog === 'function') {
       ok = await showConfirmDialog({
-        title: 'Confirm workspace mirror',
+        title: '确认工作区镜像同步',
         message: msg,
-        confirmLabel: cleanup ? 'Mirror and delete extras' : 'Mirror',
+        confirmLabel: cleanup ? '镜像并删除多余文件' : '镜像同步',
         danger: true,
         focusCancel: true,
       });
@@ -2684,13 +2702,13 @@ async function triggerMinioWorkspaceSync() {
       body: JSON.stringify({mode, cleanup_remote: cleanup, paths}),
     });
     if (res && res.ok) {
-      if (typeof showToast === 'function') showToast('Workspace sync started');
+      if (typeof showToast === 'function') showToast('工作区同步已启动');
       _pollMinioSyncWhileRunning();
     } else if (typeof showToast === 'function') {
-      showToast(res && res.error ? res.error : 'Sync failed', 'error');
+      showToast(res && res.error ? res.error : '同步失败', 'error');
     }
   } catch (e) {
-    if (typeof showToast === 'function') showToast(e.message || 'Sync failed', 'error');
+    if (typeof showToast === 'function') showToast(e.message || '同步失败', 'error');
   } finally {
     if (btn) btn.dataset.busy = '0';
     refreshMinioSyncStatus();

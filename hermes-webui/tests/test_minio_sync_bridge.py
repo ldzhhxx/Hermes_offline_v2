@@ -56,7 +56,7 @@ def test_trigger_state_sync_refused_when_disabled(monkeypatch):
     monkeypatch.delenv("HERMES_MINIO_ENABLED", raising=False)
     res = bridge.trigger_state_sync()
     assert res["ok"] is False
-    assert "not enabled" in res["error"].lower()
+    assert "未启用" in res["error"]
 
 
 def test_trigger_workspace_validates_options(monkeypatch):
@@ -115,7 +115,7 @@ def test_lane_concurrency_lock(monkeypatch):
     try:
         res = bridge.trigger_state_sync()
         assert res["ok"] is False
-        assert "already running" in res["error"]
+        assert "already running" in res["error"] or "正在进行中" in res["error"]
     finally:
         with bridge._lock:
             bridge._running["state"] = False
@@ -139,7 +139,7 @@ def test_status_unavailable_when_not_enabled(monkeypatch):
     monkeypatch.delenv("HERMES_MINIO_REGISTER_URL", raising=False)
     status = bridge.get_status()
     assert status["configured"] is False
-    assert "not enabled" in (status["unavailable_reason"] or "").lower()
+    assert "未启用" in (status["unavailable_reason"] or "")
     assert status["register_url"] == ""
 
 
@@ -246,7 +246,7 @@ def test_trigger_workspace_rejects_invalid_paths(monkeypatch):
 
     res = bridge.trigger_workspace_sync(mode="safe", paths=["../etc/passwd"])
     assert res["ok"] is False
-    assert "invalid path" in res["error"].lower()
+    assert "路径选择无效" in res["error"] or "invalid path" in res["error"].lower()
 
 
 def test_trigger_workspace_no_paths_omits_flag(monkeypatch):
@@ -280,3 +280,40 @@ def test_quota_env_invalid_value_treated_as_zero(monkeypatch):
     assert bridge._quota_bytes() == 1024
     monkeypatch.delenv("HERMES_MINIO_QUOTA_BYTES")
     assert bridge._quota_bytes() == 0
+
+
+def test_status_includes_blocked_extensions(monkeypatch):
+    """Status payload exposes the configured blocked upload extensions."""
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+    monkeypatch.setenv("HERMES_MINIO_BLOCKED_EXTENSIONS", "pdf,zip,exe")
+    # Reset module cache so new env is picked up
+    bridge._minio_sync_module = None
+    bridge._minio_sync_module_load_failed = False
+    status = bridge.get_status()
+    exts = status.get("blocked_extensions")
+    assert isinstance(exts, list)
+    assert sorted(exts) == ["exe", "pdf", "zip"]
+
+
+def test_status_blocked_extensions_default(monkeypatch):
+    """When no custom env is set, defaults are exposed."""
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+    monkeypatch.delenv("HERMES_MINIO_BLOCKED_EXTENSIONS", raising=False)
+    bridge._minio_sync_module = None
+    bridge._minio_sync_module_load_failed = False
+    status = bridge.get_status()
+    exts = status.get("blocked_extensions")
+    assert isinstance(exts, list)
+    assert "doc" in exts
+    assert "xlsx" in exts
+
+
+def test_status_blocked_extensions_empty_when_disabled(monkeypatch):
+    """When MinIO is disabled, blocked_extensions is empty."""
+    monkeypatch.delenv("HERMES_MINIO_ENABLED", raising=False)
+    status = bridge.get_status()
+    assert status.get("blocked_extensions") == []

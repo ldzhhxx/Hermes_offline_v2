@@ -343,6 +343,11 @@
   .minio-sync-quota-fill.is-warn{background:linear-gradient(90deg,#e8a030,#cc7a00);}
   .minio-sync-quota-fill.is-critical{background:linear-gradient(90deg,#d04d4d,#a02020);}
   .minio-sync-quota-warn{margin-top:4px;}
+  .minio-sync-guidance{font-size:11px;line-height:1.6;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:6px 10px;}
+  .minio-sync-guidance summary{cursor:pointer;font-weight:600;color:var(--text-secondary, var(--muted));user-select:none;}
+  .minio-sync-guidance ul{margin:6px 0 2px 0;padding-left:18px;}
+  .minio-sync-guidance li{margin-bottom:2px;}
+  .minio-sync-guidance code{font-size:10px;background:var(--surface);padding:1px 4px;border-radius:3px;}
   /* Selectable workspace tree. */
   .minio-ws-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
   .minio-ws-toolbar-btn{padding:3px 9px;border-radius:6px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;}
