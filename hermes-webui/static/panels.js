@@ -2616,8 +2616,27 @@ async function refreshMinioSyncStatus() {
       mount.hidden = true;
       return payload;
     }
+    // Preserve expanded/collapsed state across re-renders (bug fix: details
+    // section was collapsing after button actions because innerHTML wipe lost
+    // the <details open> attribute and remote file list visibility).
+    const prevDetails = mount.querySelector('#minioSyncDetails');
+    const wasOpen = prevDetails ? prevDetails.open : false;
+    const remoteEl = mount.querySelector('#minioRemoteFiles');
+    const remoteWasVisible = remoteEl ? !remoteEl.hidden : false;
+    const remoteHtml = remoteWasVisible && remoteEl ? remoteEl.innerHTML : '';
+
     mount.innerHTML = html;
     mount.hidden = false;
+
+    if (wasOpen) {
+      const det = mount.querySelector('#minioSyncDetails');
+      if (det) det.open = true;
+    }
+    if (remoteWasVisible) {
+      const rf = mount.querySelector('#minioRemoteFiles');
+      if (rf) { rf.hidden = false; rf.innerHTML = remoteHtml; }
+    }
+
     _bindMinioSyncControls();
     return payload;
   } catch (e) {
