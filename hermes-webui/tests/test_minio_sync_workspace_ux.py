@@ -448,3 +448,65 @@ class TestMinioTimestampAndIntervalDisplay:
         finally:
             if old is not None:
                 os.environ["HERMES_MINIO_SYNC_INTERVAL"] = old
+
+
+# ── 5) Details open state preservation across refreshes ────────────────────
+
+
+class TestDetailsStatePreservation:
+    """Regression: refreshMinioSyncStatus() must preserve the <details open>
+    state and remote file list visibility across re-renders (mount.innerHTML
+    replacement). Without the fix, clicking any action button collapses the
+    expanded details section."""
+
+    def test_refresh_preserves_details_open_attribute(self):
+        """The refresh function must read the previous open state from the
+        DOM before innerHTML replacement, and restore it after."""
+        js = _read("static/panels.js")
+        # Must query existing details element's open state before overwrite
+        assert "prevDetails" in js or "wasOpen" in js, (
+            "refreshMinioSyncStatus must capture details open state before "
+            "innerHTML replacement."
+        )
+        # Must restore open attribute after innerHTML
+        assert ".open = true" in js or ".open=true" in js, (
+            "refreshMinioSyncStatus must restore details open state after "
+            "innerHTML replacement."
+        )
+
+    def test_refresh_preserves_remote_files_visibility(self):
+        """The remote file list must remain visible after a refresh if it
+        was shown before the refresh."""
+        js = _read("static/panels.js")
+        assert "remoteWasVisible" in js or "remoteHtml" in js, (
+            "refreshMinioSyncStatus must preserve remote file list "
+            "visibility across re-renders."
+        )
+
+    def test_details_id_is_minioSyncDetails(self):
+        """The <details> element must have id='minioSyncDetails' for the
+        state preservation logic to work."""
+        js = _read("static/panels.js")
+        assert 'id="minioSyncDetails"' in js or "id='minioSyncDetails'" in js
+
+    def test_remote_files_id_is_minioRemoteFiles(self):
+        """The remote files container must have id='minioRemoteFiles'."""
+        js = _read("static/panels.js")
+        assert 'id="minioRemoteFiles"' in js or "id='minioRemoteFiles'" in js
+
+    def test_state_capture_before_innerhtml_assignment(self):
+        """The state capture code must appear BEFORE the innerHTML assignment
+        in the source, not after (ordering matters)."""
+        js = _read("static/panels.js")
+        # Find the refresh function
+        start = js.find("async function refreshMinioSyncStatus")
+        assert start >= 0
+        end = js.find("\nasync function mountWorkspaceMinioSync", start)
+        body = js[start:end]
+        # wasOpen capture must precede innerHTML assignment
+        capture_pos = body.find("wasOpen")
+        assign_pos = body.find("mount.innerHTML = html")
+        assert capture_pos > 0 and assign_pos > 0
+        assert capture_pos < assign_pos, (
+            "Details open state must be captured BEFORE innerHTML is replaced."
+        )
