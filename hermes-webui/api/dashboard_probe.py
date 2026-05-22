@@ -105,6 +105,9 @@ def probe_official_dashboard(
         version = payload.get("version")
         if isinstance(version, str) and version.strip():
             result["version"] = version.strip()
+        last_sync_at = payload.get("last_sync_at")
+        if isinstance(last_sync_at, (int, float)) and last_sync_at > 0:
+            result["last_sync_at"] = last_sync_at
         return result
     except Exception:
         logger.debug("official Hermes dashboard probe failed", exc_info=True)

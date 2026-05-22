@@ -38,6 +38,10 @@ _sleep = time.sleep
 _SYNC_INTERVAL_SECONDS = 5.0
 _FORCE_SYNC_ENV = "HERMES_FORCE_FILE_SYNC"
 
+# Module-level wall-clock timestamp of the last successful sync.
+# Updated by FileSyncManager on every successful commit; read by web_server.
+_global_last_sync_wall_time: float = 0.0
+
 # Transport callbacks provided by each backend
 UploadFn = Callable[[str, str], None]  # (host_path, remote_path) -> raises on failure
 BulkUploadFn = Callable[[list[tuple[str, str]]], None]  # [(host_path, remote_path), ...] -> raises on failure
@@ -202,6 +206,8 @@ class FileSyncManager:
 
             self._synced_files = new_files
             self._last_sync_time = time.monotonic()
+            global _global_last_sync_wall_time
+            _global_last_sync_wall_time = time.time()
 
         except Exception as exc:
             self._synced_files = prev_files

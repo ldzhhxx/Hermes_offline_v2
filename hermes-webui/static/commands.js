@@ -875,6 +875,15 @@ function _formatStatusTimestamp(value){
   if(Number.isNaN(date.getTime())) return t('status_unknown');
   return date.toLocaleString();
 }
+function _statusLastSyncRow(){
+  const status=(typeof window!=='undefined' && window._hermesDashboardStatus) ? window._hermesDashboardStatus : null;
+  const lastSyncAt=status&&status.last_sync_at;
+  if(!lastSyncAt) return null;
+  const relative=(typeof _formatSyncRelativeTime==='function') ? _formatSyncRelativeTime(lastSyncAt) : '';
+  const absolute=(typeof _formatSyncAbsoluteTime==='function') ? _formatSyncAbsoluteTime(lastSyncAt) : _formatStatusTimestamp(lastSyncAt);
+  if(!relative) return null;
+  return {label:'上次同步时间', value:relative, title:absolute};
+}
 function _formatStatusTokens(s){
   const lastUsage=(typeof S!=='undefined'&&(S.lastUsage||s.last_usage))||{};
   const input=Number(s.input_tokens??lastUsage.input_tokens??0)||0;
@@ -911,6 +920,8 @@ function _statusCardFromSession(s){
     {label:t('status_messages'), value:String(s.message_count??(S.messages||[]).filter(m=>m&&m.role&&m.role!=='tool').length)},
     {label:t('status_agent_running'), value:running?t('status_yes'):t('status_no')},
   ];
+  const lastSyncRow=_statusLastSyncRow();
+  if(lastSyncRow) rows.push(lastSyncRow);
   return {
     title:t('status_heading'),
     subtitle:t('status_ephemeral'),

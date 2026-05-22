@@ -520,6 +520,15 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
     return False, None
 
 
+def _get_last_sync_at() -> float | None:
+    """Return wall-clock timestamp of the last successful file sync, or None."""
+    try:
+        from tools.environments.file_sync import _global_last_sync_wall_time
+        return _global_last_sync_wall_time if _global_last_sync_wall_time > 0 else None
+    except Exception:
+        return None
+
+
 @app.get("/api/status")
 async def get_status():
     current_ver, latest_ver = check_config_version()
@@ -623,6 +632,7 @@ async def get_status():
         "gateway_exit_reason": gateway_exit_reason,
         "gateway_updated_at": gateway_updated_at,
         "active_sessions": active_sessions,
+        "last_sync_at": _get_last_sync_at(),
     }
 
 

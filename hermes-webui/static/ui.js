@@ -240,11 +240,14 @@ function _statusCardHtml(card){
   const copyBtn=sessionId
     ? `<button class="status-card-session-copy" type="button" data-copy-status-session="${esc(card.sessionId||'')}" title="${esc(t('copy'))}" onclick="copyStatusSessionId(this);event.stopPropagation()"><span>${esc(shortSessionId)}</span>${copyIcon}</button>`
     : '';
-  const rowHtml=rows.map(row=>`
+  const rowHtml=rows.map(row=>{
+    const rowTitle=row&&row.title?` title="${esc(row.title)}"`:'';
+    return `
     <div class="status-card-row">
       <span class="status-card-label">${esc(row.label||'')}</span>
-      <span class="status-card-value">${esc(row.value||'')}</span>
-    </div>`).join('');
+      <span class="status-card-value"${rowTitle}>${esc(row.value||'')}</span>
+    </div>`;
+  }).join('');
   return `<div class="status-card" data-status-card="1">
     <div class="status-card-head">
       <div class="status-card-title-wrap">
@@ -353,8 +356,27 @@ async function jumpToSessionStart(){
 const DASHBOARD_STATUS_TTL_MS=60000;
 let _dashboardStatusCache=null;
 let _dashboardStatusFetchedAt=0;
-
+function _formatSyncAbsoluteTime(value){
+  if(value===undefined||value===null||value==='') return '';
+  const date=new Date(typeof value==='number' ? (value < 1000000000000 ? value*1000 : value) : value);
+  if(Number.isNaN(date.getTime())) return '';
+  try{return date.toLocaleString();}catch(_){return date.toISOString();}
+}
+function _formatSyncRelativeTime(value){
+  if(value===undefined||value===null||value==='') return '';
+  const tsMs=typeof value==='number' ? (value < 1000000000000 ? value*1000 : value) : Date.parse(value);
+  if(!Number.isFinite(tsMs)) return '';
+  const diffMs=Math.max(0,Date.now()-tsMs);
+  const diffMin=Math.floor(diffMs/60000);
+  if(diffMin<=0) return '刚刚';
+  if(diffMin<60) return `${diffMin}分钟前`;
+  const diffHours=Math.floor(diffMin/60);
+  if(diffHours<24) return `${diffHours}小时前`;
+  const diffDays=Math.floor(diffHours/24);
+  return `${diffDays}天前`;
+}
 function _dashboardIsBrowserLoopback(){
+
   const host=(window.location.hostname||'').replace(/^\[|\]$/g,'').toLowerCase();
   return host==='127.0.0.1'||host==='localhost'||host==='::1';
 }
@@ -391,6 +413,7 @@ function _applyDashboardStatus(status){
 async function refreshDashboardStatus(force=false){
   const now=Date.now();
   if(!force&&_dashboardStatusCache&&(now-_dashboardStatusFetchedAt)<DASHBOARD_STATUS_TTL_MS){
+    window._hermesDashboardStatus=_dashboardStatusCache;
     _applyDashboardStatus(_dashboardStatusCache);
     return _dashboardStatusCache;
   }
@@ -400,6 +423,7 @@ async function refreshDashboardStatus(force=false){
   }catch(_){
     _dashboardStatusCache={running:false};
   }
+  window._hermesDashboardStatus=_dashboardStatusCache;
   _dashboardStatusFetchedAt=Date.now();
   _applyDashboardStatus(_dashboardStatusCache);
   return _dashboardStatusCache;
