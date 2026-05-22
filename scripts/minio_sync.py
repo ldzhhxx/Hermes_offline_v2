@@ -547,6 +547,70 @@ def compute_prefix_used_bytes(client=None, max_objects: int = 500000) -> int:
     return int(total)
 
 
+def compute_bucket_used_bytes(client=None, max_objects: int = 500000) -> int:
+    """Return total bytes stored in the ENTIRE bucket (all prefixes).
+
+    Used for the UI '已用空间' display so users see the full bucket usage,
+    not just their own prefix.
+    """
+    if not MINIO_BUCKET:
+        return 0
+    try:
+        if client is None:
+            client = get_client()
+    except Exception:  # pragma: no cover
+        return 0
+    total = 0
+    seen = 0
+    try:
+        for obj in client.list_objects(MINIO_BUCKET, prefix="", recursive=True):
+            seen += 1
+            if seen > max_objects:
+                break
+            size = getattr(obj, "size", None)
+            if isinstance(size, int) and size >= 0:
+                total += size
+    except Exception as exc:  # pragma: no cover
+        log.debug("compute_bucket_used_bytes failed: %s", exc)
+        return 0
+    return int(total)
+
+
+def list_remote_files(client=None, max_objects: int = 1000) -> list[dict]:
+    """List files in MinIO under the configured prefix.
+
+    Returns a list of dicts with 'path', 'size', and 'last_modified'.
+    """
+    if not MINIO_BUCKET:
+        return []
+    try:
+        if client is None:
+            client = get_client()
+    except Exception:  # pragma: no cover
+        return []
+    prefix = object_key("")
+    results: list[dict] = []
+    try:
+        for obj in client.list_objects(MINIO_BUCKET, prefix=prefix, recursive=True):
+            name = getattr(obj, "object_name", None)
+            if not name:
+                continue
+            # Strip the prefix to show relative paths
+            rel = name
+            if MINIO_PREFIX and rel.startswith(MINIO_PREFIX + "/"):
+                rel = rel[len(MINIO_PREFIX) + 1:]
+            size = getattr(obj, "size", 0) or 0
+            last_modified = getattr(obj, "last_modified", None)
+            ts = last_modified.isoformat() if last_modified else None
+            results.append({"path": rel, "size": int(size), "last_modified": ts})
+            if len(results) >= max_objects:
+                break
+    except Exception as exc:  # pragma: no cover
+        log.debug("list_remote_files failed: %s", exc)
+        return []
+    return results
+
+
 # ── Quota discovery ────────────────────────────────────────────────────────
 
 # Bucket-tag conventions checked when neither the admin API nor a per-prefix

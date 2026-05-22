@@ -761,3 +761,54 @@ def test_workspace_sync_custom_blocked_via_env(tmp_path, monkeypatch):
     assert "workspace/b.docx" in uploaded_keys  # not blocked when custom list
     assert "workspace/c.txt" in uploaded_keys
     assert result["blocked"] == 1
+
+
+# ── Bucket-level usage + remote file listing ───────────────────────────────
+
+
+def test_compute_bucket_used_bytes_sums_all_objects(tmp_path, monkeypatch):
+    """compute_bucket_used_bytes sums ALL objects in the bucket, not just prefix."""
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "user-x/diagent")
+    fake = _RecordingClient(remote_objects={
+        "user-x/diagent/home/state.db": (100, "x"),
+        "user-x/diagent/workspace/a.txt": (250, "x"),
+        "other-user/workspace/b.txt": (500, "x"),
+        "shared/data.bin": (1000, "x"),
+    })
+    used = minio_sync.compute_bucket_used_bytes(client=fake)
+    assert used == 1850  # all objects, not just under prefix
+
+
+def test_list_remote_files_returns_relative_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "user-x/diagent")
+
+    from datetime import datetime, timezone
+    ts = datetime(2026, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+
+    class FakeClient:
+        def list_objects(self, bucket, prefix, recursive=True):
+            return [
+                SimpleNamespace(object_name="user-x/diagent/home/state.db", size=100, last_modified=ts),
+                SimpleNamespace(object_name="user-x/diagent/workspace/notes.txt", size=50, last_modified=ts),
+            ]
+
+    files = minio_sync.list_remote_files(client=FakeClient())
+    assert len(files) == 2
+    assert files[0]["path"] == "home/state.db"
+    assert files[0]["size"] == 100
+    assert files[0]["last_modified"] is not None
+    assert files[1]["path"] == "workspace/notes.txt"
+
+
+def test_list_remote_files_empty_bucket(tmp_path, monkeypatch):
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "")
+
+    class FakeClient:
+        def list_objects(self, bucket, prefix, recursive=True):
+            return []
+
+    files = minio_sync.list_remote_files(client=FakeClient())
+    assert files == []

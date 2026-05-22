@@ -2249,6 +2249,8 @@ function _renderSystemHealthPanel() {
 // WebUI prefers service-derived values (admin API / bucket tag) and only
 // shows the env-override fallback when nothing better is available.
 let _minioSyncStatusCache = null;
+// Lazy-loaded usage/quota data — only populated when user clicks "查询用量".
+let _minioUsageCache = null;
 // Per-render selection of workspace entries (paths) for the workspace lane.
 // Default: everything unticked. The plan's safety guidance leans toward "no
 // dangerous hidden scope", so an empty selection blocks submission rather
@@ -2351,10 +2353,9 @@ function _renderMinioGuidance(payload) {
     : `<li>部分文件扩展名可能被管理员禁止上传</li>`;
   return `<details class="minio-sync-guidance"><summary>同步规则说明</summary><ul>
     <li><b>Hermes 状态</b>（技能、会话等）会自动定时同步，无需手动操作</li>
-    <li><b>工作区文件</b>不会自动同步 — 需要您手动勾选后点击"同步所选"</li>
-    <li><b>安全模式</b>：仅上传新增或有变化的文件（增量上传，不影响远端已有文件）</li>
-    <li><b>镜像模式</b>：用本地版本覆盖远端，适合确保远端与本地完全一致</li>
-    <li>勾选"删除远端多余文件"后，仅删除您所选范围内远端有但本地没有的文件</li>
+    <li><b>工作区文件</b>不会自动同步 — 需要您手动操作</li>
+    <li><b>同步（全量覆盖）</b>：以本地工作区为准，覆盖远端全部工作区文件，并删除远端独有文件（排除禁传扩展名）</li>
+    <li><b>上传（仅所选）</b>：仅上传您勾选的文件/文件夹，安全模式（跳过未变更文件），不删除远端任何内容</li>
     ${blockedLine}
     <li>同步不会删除您的本地文件 — 本地内容始终安全</li>
   </ul></details>`;
@@ -2397,30 +2398,41 @@ function _renderMinioSyncPanel(payload) {
   const stateRunning = !!running.state;
   const wsRunning = !!running.workspace;
   const target = `${esc(cfg.endpoint || '—')}/${esc(cfg.bucket || '—')}${cfg.prefix ? '/' + esc(cfg.prefix) : ''}`;
-  const intervalLine = `守护进程每 ${Math.max(1, cfg.sync_interval_seconds || 0)} 秒自动同步 Hermes 状态。工作区上传需手动触发。`;
 
-  const quota = Number(payload.quota_bytes) || 0;
-  const used = Number(payload.used_bytes) || 0;
-  const remaining = (payload.remaining_bytes === null || payload.remaining_bytes === undefined)
-    ? null
-    : Number(payload.remaining_bytes);
+  // Usage stats are lazy-loaded via /api/minio/sync/usage (click-to-request).
+  // On initial render we show a button; after the user clicks it we cache the
+  // result in _minioUsageCache and re-render with the numbers filled in.
+  const usageCache = _minioUsageCache;
+  const quota = usageCache ? (Number(usageCache.quota_bytes) || 0) : 0;
+  const used = usageCache ? (Number(usageCache.used_bytes) || 0) : 0;
+  const remaining = usageCache
+    ? ((usageCache.remaining_bytes === null || usageCache.remaining_bytes === undefined) ? null : Number(usageCache.remaining_bytes))
+    : null;
   const usedPct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const usedClass = usedPct >= 95 ? 'is-critical' : (usedPct >= 80 ? 'is-warn' : '');
-  // Surface where the quota came from so operators understand whether the
-  // displayed limit was discovered live (admin API / bucket tag) or copied
-  // from the env-override fallback. The env path is always shown as such —
-  // the user explicitly asked us not to treat env quota as the primary model.
-  const quotaSource = String((payload.quota_source || 'unset')).toLowerCase();
+  const quotaSource = usageCache ? String((usageCache.quota_source || 'unset')).toLowerCase() : 'unset';
   const quotaSourceLabel = (quota > 0)
     ? (quotaSource === 'admin_api' ? '自动发现（MinIO 管理 API）'
        : quotaSource === 'bucket_tag' ? '自动发现（存储桶标签）'
        : quotaSource === 'env' ? '运维覆盖（HERMES_MINIO_QUOTA_BYTES）'
        : '未知来源')
     : '';
-  const quotaBlock = quota > 0
-    ? `<div class="minio-sync-quota">
+
+  // Compact status line always visible
+  const statusLine = usageCache
+    ? (quota > 0 ? `已用 ${_formatMinioBytes(used)} / ${_formatMinioBytes(quota)} (${usedPct}%)` : `已用 ${_formatMinioBytes(used)}`)
+    : '用量未加载 · 点击详情内按钮查询';
+
+  let quotaBlock;
+  if (!usageCache) {
+    quotaBlock = `<div class="minio-sync-quota minio-sync-quota--lazy">
+        <button type="button" class="minio-sync-btn" id="minioUsageBtn" onclick="triggerMinioFetchUsage()">查询用量</button>
+        <span class="minio-sync-sub">点击查询存储桶用量与配额（需访问 MinIO）</span>
+      </div>`;
+  } else if (quota > 0) {
+    quotaBlock = `<div class="minio-sync-quota">
         <div class="minio-sync-quota-row">
-          <span class="minio-sync-quota-label">已用</span>
+          <span class="minio-sync-quota-label">存储桶已用</span>
           <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))}${usedPct ? ` (${usedPct}%)` : ''}</span>
         </div>
         <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
@@ -2429,10 +2441,12 @@ function _renderMinioSyncPanel(payload) {
           <span class="minio-sync-quota-value">${esc(remaining === null ? '—' : _formatMinioBytes(remaining))}</span>
         </div>
         <div class="minio-sync-quota-source" data-quota-source="${esc(quotaSource)}">${esc(quotaSourceLabel)}</div>
-      </div>`
-    : `<div class="minio-sync-quota minio-sync-quota--unset">
+        <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
+      </div>`;
+  } else {
+    quotaBlock = `<div class="minio-sync-quota minio-sync-quota--unset">
          <div class="minio-sync-quota-row">
-           <span class="minio-sync-quota-label">已用</span>
+           <span class="minio-sync-quota-label">存储桶已用</span>
            <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))}</span>
          </div>
          <div class="minio-sync-quota-row">
@@ -2440,7 +2454,9 @@ function _renderMinioSyncPanel(payload) {
            <span class="minio-sync-quota-value">自动发现未返回配额信息</span>
          </div>
          <div class="minio-sync-quota-source" data-quota-source="unset">运维可设置 HERMES_MINIO_QUOTA_BYTES 作为兜底</div>
+         <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
        </div>`;
+  }
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
   const guidanceBlock = _renderMinioGuidance(payload);
 
@@ -2449,75 +2465,63 @@ function _renderMinioSyncPanel(payload) {
       <div class="minio-sync-head">
         <div>
           <div class="insights-card-title">MinIO 同步</div>
-          <div class="minio-sync-sub">${esc(intervalLine)}</div>
+          <div class="minio-sync-sub">${esc(statusLine)} · ${cfg.secure ? 'HTTPS' : 'HTTP'}</div>
         </div>
-        <span class="minio-sync-status" id="minioSyncStatus"><span class="minio-sync-dot" aria-hidden="true"></span>${cfg.secure ? 'HTTPS' : 'HTTP'} · ${esc(target)}</span>
+        <span class="minio-sync-status" id="minioSyncStatus"><span class="minio-sync-dot" aria-hidden="true"></span>${esc(target)}</span>
       </div>
 
-      ${quotaBlock}
+      <details class="minio-sync-collapse" id="minioSyncDetails">
+        <summary class="minio-sync-collapse-toggle">展开详情</summary>
 
-      ${guidanceBlock}
+        ${quotaBlock}
 
-      <div class="minio-sync-row">
-        <div class="minio-sync-row-info">
-          <div class="minio-sync-row-title">Hermes 状态</div>
-          <div class="minio-sync-row-sub">技能、会话、记忆、看板、state.db 等。自动同步；此按钮可立即触发一次。</div>
-          ${_renderMinioSyncResult('state', last.state)}
-        </div>
-        <div class="minio-sync-row-actions">
-          <button type="button" class="minio-sync-btn" id="minioSyncStateBtn" onclick="triggerMinioStateSync()" ${stateRunning ? 'disabled' : ''}>
-            ${stateRunning ? '同步中…' : '立即同步状态'}
-          </button>
-        </div>
-      </div>
+        ${guidanceBlock}
 
-      <div class="minio-sync-row minio-sync-row--workspace">
-        <div class="minio-sync-row-info">
-          <div class="minio-sync-row-title">工作区</div>
-          <div class="minio-sync-row-sub"><code>workspace/</code> 下的用户文件。仅手动上传 — 请勾选需要同步的项目。</div>
-          ${entriesBlock}
-          <div class="minio-sync-options">
-            <label class="minio-sync-option">
-              <span>模式</span>
-              <select id="minioWorkspaceMode" ${wsRunning ? 'disabled' : ''}>
-                <option value="safe" selected>安全（跳过未变更文件）</option>
-                <option value="mirror">镜像（始终覆盖）</option>
-              </select>
-            </label>
-            <label class="minio-sync-option minio-sync-option--danger" id="minioCleanupOption" hidden>
-              <input type="checkbox" id="minioCleanupRemote" ${wsRunning ? 'disabled' : ''}>
-              <span>删除远端已不存在于本地的文件（仅限所选范围内）</span>
-            </label>
+        <div class="minio-sync-row">
+          <div class="minio-sync-row-info">
+            <div class="minio-sync-row-title">Hermes 状态</div>
+            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。守护进程自动同步；此按钮可立即触发一次。</div>
+            ${_renderMinioSyncResult('state', last.state)}
           </div>
-          <div class="minio-sync-warn" id="minioMirrorWarn" hidden>
-            镜像模式将用本地版本覆盖所有已选择的远端文件。 With 「删除远端多余文件」 后，还会<strong>移除</strong>本地不存在但远端存在的文件  — 但仅限于您所选的路径范围。
+          <div class="minio-sync-row-actions">
+            <button type="button" class="minio-sync-btn" id="minioSyncStateBtn" onclick="triggerMinioStateSync()" ${stateRunning ? 'disabled' : ''}>
+              ${stateRunning ? '同步中…' : '立即同步状态'}
+            </button>
           </div>
-          <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
-          ${_renderMinioSyncResult('workspace', last.workspace)}
         </div>
-        <div class="minio-sync-row-actions">
-          <button type="button" class="minio-sync-btn" id="minioSyncWorkspaceBtn" onclick="triggerMinioWorkspaceSync()" ${wsRunning ? 'disabled' : ''}>
-            ${wsRunning ? '同步中…' : '同步所选'}
-          </button>
+
+        <div class="minio-sync-row minio-sync-row--workspace">
+          <div class="minio-sync-row-info">
+            <div class="minio-sync-row-title">工作区</div>
+            <div class="minio-sync-row-sub"><code>workspace/</code> 下的用户文件。请选择操作方式：</div>
+            ${entriesBlock}
+            <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
+            ${_renderMinioSyncResult('workspace', last.workspace)}
+          </div>
+          <div class="minio-sync-row-actions minio-sync-row-actions--multi">
+            <button type="button" class="minio-sync-btn minio-sync-btn--full" id="minioSyncFullBtn" onclick="triggerMinioFullSync()" ${wsRunning ? 'disabled' : ''} title="以本地工作区为准覆盖远端全部文件（排除禁传扩展名），并删除远端多余文件">
+              ${wsRunning ? '同步中…' : '同步'}
+            </button>
+            <button type="button" class="minio-sync-btn" id="minioSyncUploadBtn" onclick="triggerMinioUploadSelected()" ${wsRunning ? 'disabled' : ''} title="仅上传勾选的文件/文件夹（安全模式，不删除远端）">
+              ${wsRunning ? '上传中…' : '上传'}
+            </button>
+          </div>
         </div>
-      </div>
+
+        <div class="minio-sync-row minio-sync-row--browse">
+          <div class="minio-sync-row-info">
+            <div class="minio-sync-row-title">查看远端文件</div>
+            <div class="minio-sync-row-sub">查看当前 MinIO 中已存储的文件列表</div>
+          </div>
+          <div class="minio-sync-row-actions">
+            <button type="button" class="minio-sync-btn" id="minioBrowseBtn" onclick="triggerMinioBrowseRemote()">查看</button>
+          </div>
+        </div>
+        <div class="minio-remote-files" id="minioRemoteFiles" hidden></div>
+      </details>
     </section>`;
 }
 function _bindMinioSyncControls() {
-  const modeSel = document.getElementById('minioWorkspaceMode');
-  const cleanupRow = document.getElementById('minioCleanupOption');
-  const cleanupBox = document.getElementById('minioCleanupRemote');
-  const warn = document.getElementById('minioMirrorWarn');
-  if (modeSel && cleanupRow && warn) {
-    const sync = () => {
-      const mirror = modeSel.value === 'mirror';
-      cleanupRow.hidden = !mirror;
-      warn.hidden = !mirror;
-      if (!mirror && cleanupBox) cleanupBox.checked = false;
-    };
-    modeSel.addEventListener('change', sync);
-    sync();
-  }
   // Workspace selection events: rebind every render because innerHTML wipes
   // listeners.
   const list = document.getElementById('minioWsList');
@@ -2558,7 +2562,7 @@ function _bindMinioSyncControls() {
 function _refreshMinioWsSummary() {
   const summaryEl = document.getElementById('minioWsSummary');
   const warnEl = document.getElementById('minioQuotaWarn');
-  const btn = document.getElementById('minioSyncWorkspaceBtn');
+  const uploadBtn = document.getElementById('minioSyncUploadBtn');
   if (!summaryEl) return;
   const payload = _minioSyncStatusCache || {};
   const entries = Array.isArray(payload.workspace_entries) ? payload.workspace_entries : [];
@@ -2571,15 +2575,14 @@ function _refreshMinioWsSummary() {
     count++;
   }
   if (count === 0) {
-    summaryEl.textContent = '未选择任何项目';
+    summaryEl.textContent = '未选择任何项目（上传按钮需选择）';
   } else {
     summaryEl.textContent = `${count} 项已选 · ${_formatMinioBytes(totalSize)}`;
   }
-  // Quota guard: block sync if the selection alone would exceed the
-  // remaining quota. The plan calls this out as a "prefer blocking" case.
+  // Quota guard — uses lazy-loaded usage cache
   let blocked = false;
   let warnText = '';
-  const remaining = payload.remaining_bytes;
+  const remaining = _minioUsageCache ? _minioUsageCache.remaining_bytes : undefined;
   if (typeof remaining === 'number' && remaining >= 0 && totalSize > remaining) {
     blocked = true;
     warnText = `所选内容（${_formatMinioBytes(totalSize)}）超出剩余配额（${_formatMinioBytes(remaining)}）。请减少选择或释放空间后再同步。`;
@@ -2588,9 +2591,8 @@ function _refreshMinioWsSummary() {
     warnEl.hidden = !warnText;
     warnEl.textContent = warnText;
   }
-  if (btn) {
-    btn.disabled = (count === 0) || blocked || btn.dataset.busy === '1';
-    btn.dataset.blockedReason = blocked ? 'quota' : (count === 0 ? 'empty' : '');
+  if (uploadBtn) {
+    uploadBtn.disabled = (count === 0) || blocked || uploadBtn.dataset.busy === '1';
   }
 }
 async function refreshMinioSyncStatus() {
@@ -2666,43 +2668,31 @@ async function triggerMinioStateSync() {
     refreshMinioSyncStatus();
   }
 }
-async function triggerMinioWorkspaceSync() {
-  const modeSel = document.getElementById('minioWorkspaceMode');
-  const cleanupBox = document.getElementById('minioCleanupRemote');
-  const mode = modeSel ? modeSel.value : 'safe';
-  const cleanup = !!(cleanupBox && cleanupBox.checked);
-  const paths = Array.from(_minioWorkspaceSelection);
-  if (!paths.length) {
-    if (typeof showToast === 'function') showToast('请至少选择一个项目进行同步', 'error');
-    return;
+async function triggerMinioFullSync() {
+  // Full workspace sync: mirror mode + cleanup_remote, no path selection
+  const msg = '同步将以本地工作区为准，覆盖远端全部工作区文件，并删除远端独有的文件（禁传扩展名的文件除外）。确认继续？';
+  let ok = true;
+  if (typeof showConfirmDialog === 'function') {
+    ok = await showConfirmDialog({
+      title: '确认全量同步工作区',
+      message: msg,
+      confirmLabel: '同步',
+      danger: true,
+      focusCancel: true,
+    });
+  } else {
+    ok = window.confirm(msg);
   }
-  if (mode === 'mirror') {
-    const msg = cleanup
-      ? `镜像模式（含清理）：所有已选择的工作区文件将覆盖 MinIO 上的版本，且所选范围内远端独有的文件将被删除。确认继续同步 ${paths.length} 个项目？`
-      : `镜像模式：所有已选择的工作区文件将覆盖 MinIO 上的版本。确认继续同步 ${paths.length} 个项目？`;
-    let ok = true;
-    if (typeof showConfirmDialog === 'function') {
-      ok = await showConfirmDialog({
-        title: '确认工作区镜像同步',
-        message: msg,
-        confirmLabel: cleanup ? '镜像并删除多余文件' : '镜像同步',
-        danger: true,
-        focusCancel: true,
-      });
-    } else {
-      ok = window.confirm(msg);
-    }
-    if (!ok) return;
-  }
-  const btn = document.getElementById('minioSyncWorkspaceBtn');
+  if (!ok) return;
+  const btn = document.getElementById('minioSyncFullBtn');
   if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
   try {
     const res = await api('/api/minio/sync/workspace', {
       method: 'POST',
-      body: JSON.stringify({mode, cleanup_remote: cleanup, paths}),
+      body: JSON.stringify({mode: 'mirror', cleanup_remote: true, paths: null}),
     });
     if (res && res.ok) {
-      if (typeof showToast === 'function') showToast('工作区同步已启动');
+      if (typeof showToast === 'function') showToast('全量同步已启动');
       _pollMinioSyncWhileRunning();
     } else if (typeof showToast === 'function') {
       showToast(res && res.error ? res.error : '同步失败', 'error');
@@ -2713,6 +2703,84 @@ async function triggerMinioWorkspaceSync() {
     if (btn) btn.dataset.busy = '0';
     refreshMinioSyncStatus();
   }
+}
+async function triggerMinioUploadSelected() {
+  // Upload only selected files/folders in safe mode, no deletion
+  const paths = Array.from(_minioWorkspaceSelection);
+  if (!paths.length) {
+    if (typeof showToast === 'function') showToast('请至少勾选一个文件或文件夹', 'error');
+    return;
+  }
+  const btn = document.getElementById('minioSyncUploadBtn');
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
+  try {
+    const res = await api('/api/minio/sync/workspace', {
+      method: 'POST',
+      body: JSON.stringify({mode: 'safe', cleanup_remote: false, paths}),
+    });
+    if (res && res.ok) {
+      if (typeof showToast === 'function') showToast(`正在上传 ${paths.length} 个项目`);
+      _pollMinioSyncWhileRunning();
+    } else if (typeof showToast === 'function') {
+      showToast(res && res.error ? res.error : '上传失败', 'error');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast(e.message || '上传失败', 'error');
+  } finally {
+    if (btn) btn.dataset.busy = '0';
+    refreshMinioSyncStatus();
+  }
+}
+async function triggerMinioFetchUsage() {
+  const btn = document.getElementById('minioUsageBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await api('/api/minio/sync/usage');
+    if (res && res.ok) {
+      _minioUsageCache = res;
+      refreshMinioSyncStatus();
+    } else {
+      if (typeof showToast === 'function') showToast((res && res.error) || '查询用量失败', 'error');
+    }
+  } catch (e) {
+    if (typeof showToast === 'function') showToast(e.message || '查询用量失败', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+async function triggerMinioBrowseRemote() {
+  const container = document.getElementById('minioRemoteFiles');
+  if (!container) return;
+  const btn = document.getElementById('minioBrowseBtn');
+  if (btn) btn.disabled = true;
+  container.hidden = false;
+  container.innerHTML = '<div class="minio-sync-sub">加载中…</div>';
+  try {
+    const res = await api('/api/minio/sync/remote-files');
+    if (!res || !res.ok) {
+      container.innerHTML = `<div class="minio-sync-warn">${esc(res && res.error ? res.error : '获取失败')}</div>`;
+      return;
+    }
+    const files = res.files || [];
+    if (!files.length) {
+      container.innerHTML = '<div class="minio-sync-empty">远端无文件</div>';
+      return;
+    }
+    const rows = files.map(f => {
+      const sizeStr = _formatMinioBytes(f.size || 0);
+      const ts = f.last_modified ? new Date(f.last_modified).toLocaleString() : '—';
+      return `<div class="minio-remote-file-row"><span class="minio-remote-file-path">${esc(f.path)}</span><span class="minio-remote-file-meta">${esc(sizeStr)} · ${esc(ts)}</span></div>`;
+    }).join('');
+    container.innerHTML = `<div class="minio-remote-file-header">远端文件（${files.length} 个）<button type="button" class="minio-ws-toolbar-btn" onclick="document.getElementById('minioRemoteFiles').hidden=true">关闭</button></div><div class="minio-remote-file-list">${rows}</div>`;
+  } catch (e) {
+    container.innerHTML = `<div class="minio-sync-warn">${esc(e.message || '获取失败')}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+// Legacy compat: keep old name so existing tests still pass
+async function triggerMinioWorkspaceSync() {
+  return triggerMinioUploadSelected();
 }
 
 function _renderLlmWikiStatus(d) {

@@ -230,8 +230,11 @@ class TestQuotaAutoDiscoverySemantics:
     """The bridge must prefer service-derived quota and only fall back to
     HERMES_MINIO_QUOTA_BYTES as an explicit operator override.
 
-    The new `quota_source` field tells the WebUI which path produced the
+    The `quota_source` field tells the WebUI which path produced the
     number so operators can tell discovery from override at a glance.
+
+    Since quota/usage are now served by `get_usage()` (click-to-request),
+    these tests exercise that endpoint rather than `get_status()`.
     """
 
     def _stub_module(self, monkeypatch, *, discover_value):
@@ -251,9 +254,9 @@ class TestQuotaAutoDiscoverySemantics:
     def test_admin_api_takes_precedence_over_env(self, monkeypatch):
         monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(5 * 1024**3))
         self._stub_module(monkeypatch, discover_value=(20 * 1024**3, "admin_api"))
-        status = bridge.get_status()
-        assert status["quota_bytes"] == 20 * 1024**3
-        assert status["quota_source"] == "admin_api", (
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 20 * 1024**3
+        assert usage["quota_source"] == "admin_api", (
             "admin_api result must take precedence over the env fallback"
         )
 
@@ -262,28 +265,28 @@ class TestQuotaAutoDiscoverySemantics:
         self._stub_module(
             monkeypatch, discover_value=(15 * 1024**3, "bucket_tag")
         )
-        status = bridge.get_status()
-        assert status["quota_bytes"] == 15 * 1024**3
-        assert status["quota_source"] == "bucket_tag"
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 15 * 1024**3
+        assert usage["quota_source"] == "bucket_tag"
 
     def test_falls_back_to_env_when_discovery_unset(self, monkeypatch):
         """When live discovery returns 0/unset, the env override is the
         last-resort fallback — labeled as such."""
         monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(7 * 1024**3))
         self._stub_module(monkeypatch, discover_value=(0, "unset"))
-        status = bridge.get_status()
-        assert status["quota_bytes"] == 7 * 1024**3
-        assert status["quota_source"] == "env"
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 7 * 1024**3
+        assert usage["quota_source"] == "env"
 
     def test_unset_when_neither_discovery_nor_env_provides(self, monkeypatch):
         monkeypatch.delenv("HERMES_MINIO_QUOTA_BYTES", raising=False)
         self._stub_module(monkeypatch, discover_value=(0, "unset"))
-        status = bridge.get_status()
-        assert status["quota_bytes"] == 0
-        assert status["quota_source"] == "unset"
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 0
+        assert usage["quota_source"] == "unset"
         # Remaining is null so the UI can show "—" rather than an inflated
         # number.
-        assert status["remaining_bytes"] is None
+        assert usage["remaining_bytes"] is None
 
     def test_unavailable_minio_keeps_env_override_visible_as_env(
         self, monkeypatch
@@ -293,10 +296,9 @@ class TestQuotaAutoDiscoverySemantics:
         the source label remains accurate end-to-end."""
         monkeypatch.delenv("HERMES_MINIO_ENABLED", raising=False)
         monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(3 * 1024**3))
-        status = bridge.get_status()
-        assert status["configured"] is False
-        assert status["quota_bytes"] == 3 * 1024**3
-        assert status["quota_source"] == "env"
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 3 * 1024**3
+        assert usage["quota_source"] == "env"
 
     def test_module_without_discover_quota_falls_back_to_env(self, monkeypatch):
         """Old script module without `discover_quota` must not crash the
@@ -311,9 +313,23 @@ class TestQuotaAutoDiscoverySemantics:
         monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio:9000")
         monkeypatch.setenv("HERMES_MINIO_BUCKET", "b")
         monkeypatch.setenv("HERMES_MINIO_QUOTA_BYTES", str(2 * 1024**3))
+        usage = bridge.get_usage()
+        assert usage["quota_bytes"] == 2 * 1024**3
+        assert usage["quota_source"] == "env"
+
+    def test_status_endpoint_no_longer_includes_usage_fields(self, monkeypatch):
+        """get_status() must NOT include quota/usage fields — they are now
+        lazy-loaded via get_usage() to avoid expensive bucket scans on
+        every panel refresh."""
+        monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+        monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio:9000")
+        monkeypatch.setenv("HERMES_MINIO_BUCKET", "b")
+        self._stub_module(monkeypatch, discover_value=(10 * 1024**3, "admin_api"))
         status = bridge.get_status()
-        assert status["quota_bytes"] == 2 * 1024**3
-        assert status["quota_source"] == "env"
+        assert "quota_bytes" not in status
+        assert "used_bytes" not in status
+        assert "remaining_bytes" not in status
+        assert "quota_source" not in status
 
 
 # ── 4) Workspace mount renderer markup includes quota_source label ─────────
@@ -354,8 +370,8 @@ class TestMinioGuidanceAndBlockedExtensions:
         # Key guidance items in Chinese
         assert "自动定时同步" in js or "自动同步" in js, "Should mention auto state sync"
         assert "不会自动同步" in js, "Should explain workspace is manual only"
-        assert "安全模式" in js, "Should explain safe mode"
-        assert "镜像模式" in js, "Should explain mirror mode"
+        assert "全量覆盖" in js, "Should explain full sync semantics"
+        assert "仅所选" in js or "仅上传" in js, "Should explain upload-selected semantics"
         assert "不会删除您的本地文件" in js, "Should reassure local files are safe"
         assert "禁传扩展名" in js or "禁传" in js, "Should mention blocked extensions"
 

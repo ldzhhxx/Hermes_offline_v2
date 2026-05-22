@@ -2905,6 +2905,14 @@ def handle_get(handler, parsed) -> bool:
         from api import minio_sync as _minio_sync
         return j(handler, _minio_sync.get_status())
 
+    if parsed.path == "/api/minio/sync/usage":
+        from api import minio_sync as _minio_sync
+        return j(handler, _minio_sync.get_usage())
+
+    if parsed.path == "/api/minio/sync/remote-files":
+        from api import minio_sync as _minio_sync
+        return j(handler, _minio_sync.get_remote_files())
+
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 

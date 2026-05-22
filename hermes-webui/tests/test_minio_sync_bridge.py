@@ -149,7 +149,8 @@ def test_status_includes_register_url(monkeypatch):
     assert status["register_url"] == "https://example.invalid/register"
 
 
-def test_status_includes_quota_total_used_remaining(monkeypatch):
+def test_usage_includes_quota_total_used_remaining(monkeypatch):
+    """Quota/usage fields are now on get_usage() (click-to-request), not get_status()."""
     monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
     monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
     monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
@@ -161,15 +162,21 @@ def test_status_includes_quota_total_used_remaining(monkeypatch):
     fake_module.validate_workspace_paths = lambda paths: list(paths or [])
     monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
 
+    usage = bridge.get_usage()
+    assert usage["ok"] is True
+    assert usage["quota_bytes"] == 10 * 1024 * 1024 * 1024
+    assert usage["used_bytes"] == 2 * 1024 * 1024 * 1024
+    assert usage["remaining_bytes"] == 8 * 1024 * 1024 * 1024
+
+    # Verify get_status() no longer includes these expensive fields
     status = bridge.get_status()
     assert status["configured"] is True
-    assert status["unavailable_reason"] is None
-    assert status["quota_bytes"] == 10 * 1024 * 1024 * 1024
-    assert status["used_bytes"] == 2 * 1024 * 1024 * 1024
-    assert status["remaining_bytes"] == 8 * 1024 * 1024 * 1024
+    assert "quota_bytes" not in status
+    assert "used_bytes" not in status
+    assert "remaining_bytes" not in status
 
 
-def test_status_quota_unset_returns_none_remaining(monkeypatch):
+def test_usage_quota_unset_returns_none_remaining(monkeypatch):
     monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
     monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
     monkeypatch.setenv("HERMES_MINIO_BUCKET", "b")
@@ -179,11 +186,11 @@ def test_status_quota_unset_returns_none_remaining(monkeypatch):
     fake_module.compute_prefix_used_bytes = lambda: 0
     fake_module.validate_workspace_paths = lambda paths: list(paths or [])
     monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
-    status = bridge.get_status()
-    assert status["quota_bytes"] == 0
+    usage = bridge.get_usage()
+    assert usage["quota_bytes"] == 0
     # Unset quota → "unknown" remaining, surfaced as None for the UI to render
     # as "—" instead of an inflated number.
-    assert status["remaining_bytes"] is None
+    assert usage["remaining_bytes"] is None
 
 
 def test_status_lists_workspace_entries(monkeypatch):
@@ -317,3 +324,33 @@ def test_status_blocked_extensions_empty_when_disabled(monkeypatch):
     monkeypatch.delenv("HERMES_MINIO_ENABLED", raising=False)
     status = bridge.get_status()
     assert status.get("blocked_extensions") == []
+
+
+# ── Remote file listing via bridge ─────────────────────────────────────────
+
+
+def test_get_remote_files_when_disabled(monkeypatch):
+    monkeypatch.delenv("HERMES_MINIO_ENABLED", raising=False)
+    res = bridge.get_remote_files()
+    assert res["ok"] is False
+    assert res["files"] == []
+
+
+def test_get_remote_files_when_configured(monkeypatch):
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "b")
+    fake_module = type("Fake", (), {})()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.compute_prefix_used_bytes = lambda: 0
+    fake_module.compute_bucket_used_bytes = lambda: 0
+    fake_module.validate_workspace_paths = lambda raw: list(raw or [])
+    fake_module.list_remote_files = lambda: [
+        {"path": "home/state.db", "size": 100, "last_modified": None},
+        {"path": "workspace/a.txt", "size": 50, "last_modified": "2026-01-15T10:00:00+00:00"},
+    ]
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+    res = bridge.get_remote_files()
+    assert res["ok"] is True
+    assert len(res["files"]) == 2
+    assert res["files"][0]["path"] == "home/state.db"

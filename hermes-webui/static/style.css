@@ -386,6 +386,22 @@
   .workspace-cloud-sync .minio-sync-row-actions{justify-content:flex-end;}
   .workspace-cloud-sync .minio-ws-list{max-height:140px;}
   .workspace-cloud-sync .minio-sync-quota-source{font-size:10px;color:var(--muted);font-style:italic;line-height:1.3;}
+  /* Collapsible panel body */
+  .minio-sync-collapse{display:flex;flex-direction:column;gap:12px;}
+  .minio-sync-collapse-toggle{cursor:pointer;font-size:11px;font-weight:600;color:var(--accent);user-select:none;padding:2px 0;}
+  .minio-sync-collapse-toggle:hover{text-decoration:underline;}
+  /* Multi-button row */
+  .minio-sync-row-actions--multi{display:flex;gap:6px;flex-shrink:0;align-items:flex-start;}
+  .minio-sync-btn--full{background:color-mix(in srgb,var(--accent) 18%,var(--surface));border-color:var(--accent);color:var(--accent);}
+  .minio-sync-btn--full:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 30%,var(--surface));}
+  /* Remote files viewer */
+  .minio-remote-files{margin-top:4px;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:220px;overflow-y:auto;font-size:11px;}
+  .minio-remote-file-header{display:flex;align-items:center;justify-content:space-between;font-weight:600;margin-bottom:6px;}
+  .minio-remote-file-list{display:flex;flex-direction:column;gap:2px;}
+  .minio-remote-file-row{display:flex;justify-content:space-between;gap:8px;padding:2px 4px;border-radius:3px;}
+  .minio-remote-file-row:hover{background:var(--hover-bg);}
+  .minio-remote-file-path{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',ui-monospace,monospace;font-size:11px;}
+  .minio-remote-file-meta{flex-shrink:0;color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums;}
   .app-titlebar-icon{display:inline-flex;align-items:center;color:var(--accent);}
   .app-titlebar-title{font-size:12px;font-weight:600;color:var(--text);letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60vw;}
   .app-titlebar-sub{font-size:10px;color:var(--muted);background:var(--hover-bg);padding:2px 7px;border-radius:4px;font-family:'SF Mono',ui-monospace,monospace;white-space:nowrap;flex-shrink:0;}
