@@ -41,11 +41,15 @@ def _reset_lanes():
         for lane in bridge._LANES:
             bridge._running[lane] = False
             bridge._last_result[lane] = None
+    bridge._credential_probe_cache["expires_at"] = 0.0
+    bridge._credential_probe_cache["result"] = None
     yield
     with bridge._lock:
         for lane in bridge._LANES:
             bridge._running[lane] = False
             bridge._last_result[lane] = None
+    bridge._credential_probe_cache["expires_at"] = 0.0
+    bridge._credential_probe_cache["result"] = None
 
 
 def _read(rel: str) -> str:
@@ -90,12 +94,18 @@ class TestWorkspaceMountVisibility:
             "panels.js must render MinIO sync into the workspace right-side "
             "mount (#workspaceMinioSyncMount)."
         )
+        assert "payload.registration_required" in js, (
+            "The workspace MinIO renderer must respect registration_required so invalid AK/SK still show the registration CTA."
+        )
         # The previous code used getElementById('minioSyncPanel') as the
         # render host. Make sure we don't regress to that pattern.
         assert "getElementById('minioSyncPanel')" not in js, (
             "Found legacy reference to #minioSyncPanel as a render host. The "
             "panel now lives at #workspaceMinioSyncMount; getting it from "
             "#minioSyncPanel will silently lose the workspace placement."
+        )
+        assert "当前 MinIO 凭证无效，需重新注册或申请存储空间" in js, (
+            "Unavailable card should explain the credential-invalid registration state in Chinese."
         )
 
     def test_minio_panel_not_rendered_inside_insights_box(self):
@@ -181,9 +191,10 @@ class TestUnavailableVsConfiguredPaths:
         assert status["configured"] is False
         assert status["unavailable_reason"]
         assert status["register_url"] == "https://internal.example/storage"
-        # The workspace renderer keys off `configured` to pick the
-        # unavailable card; ensure it's a clean boolean.
+        # The workspace renderer keys off `configured` / registration state to pick
+        # the unavailable card; ensure these stay simple booleans.
         assert isinstance(status["configured"], bool)
+        assert isinstance(status.get("registration_required", False), bool)
 
     def test_unavailable_when_only_partial_config(self, monkeypatch):
         """Enabled but missing endpoint/bucket must still report unavailable
@@ -196,6 +207,37 @@ class TestUnavailableVsConfiguredPaths:
         reason = (status["unavailable_reason"] or "")
         assert "缺少" in reason or "missing" in reason.lower()
         assert "endpoint" in reason.lower() or "bucket" in reason.lower()
+
+    def test_invalid_credentials_still_surface_registration_cta_payload(self, monkeypatch):
+        """If AK/SK are present but rejected, the payload should still drive the
+        workspace registration CTA rather than rendering the normal configured panel."""
+        monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+        monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+        monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+        monkeypatch.setenv(
+            "HERMES_MINIO_REGISTER_URL", "https://internal.example/storage"
+        )
+
+        class AuthError(Exception):
+            code = "SignatureDoesNotMatch"
+
+        class FakeClient:
+            def bucket_exists(self, _bucket):
+                raise AuthError("The request signature we calculated does not match")
+
+        fake = type("Fake", (), {})()
+        fake.get_client = lambda: FakeClient()
+        fake.list_workspace_entries = lambda: []
+        fake.compute_prefix_used_bytes = lambda: 0
+        fake.validate_workspace_paths = lambda raw: list(raw or [])
+        fake.get_blocked_extensions = lambda: frozenset()
+        monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake)
+
+        status = bridge.get_status()
+        assert status["configured"] is True
+        assert status["registration_required"] is True
+        assert status["register_url"] == "https://internal.example/storage"
+        assert status["registration_state"] == "credential_invalid"
 
     def test_configured_payload_renders_with_workspace_entries(
         self, monkeypatch

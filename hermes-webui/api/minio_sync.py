@@ -179,6 +179,12 @@ def _config_completeness(cfg: dict[str, Any]) -> tuple[bool, str | None]:
 _minio_sync_module = None
 _minio_sync_module_load_failed = False
 
+_CREDENTIAL_PROBE_TTL_SECONDS = 15.0
+_credential_probe_cache: dict[str, Any] = {
+    "expires_at": 0.0,
+    "result": None,
+}
+
 
 def _load_minio_sync_module():
     """Import scripts/minio_sync.py once for read-only metadata helpers.
@@ -217,6 +223,70 @@ def _blocked_extensions() -> list[str]:
         return sorted(module.get_blocked_extensions())
     except Exception:
         return []
+
+
+def _looks_like_invalid_minio_credentials(exc: Exception) -> bool:
+    """Return True when the exception strongly suggests invalid/unprovisioned AK/SK."""
+    code = str(getattr(exc, "code", "") or "").strip().lower()
+    text = str(exc or "").strip().lower()
+    haystack = f"{code}\n{text}"
+    needles = (
+        "invalidaccesskeyid",
+        "signaturedoesnotmatch",
+        "accessdenied",
+        "invalid access key",
+        "access key id",
+        "secret key",
+        "invalid credentials",
+        "forbidden",
+        "unauthorized",
+    )
+    return any(needle in haystack for needle in needles)
+
+
+def _probe_registration_requirement(cfg: dict[str, Any], configured: bool) -> dict[str, Any] | None:
+    """Return registration/auth failure metadata when AK/SK appear invalid.
+
+    This keeps the normal env-based `configured` meaning intact while letting the
+    WebUI switch to the same registration CTA card when the current credentials
+    clearly fail MinIO auth. The probe is cached briefly because `/status` may be
+    polled multiple times while a sync is in flight.
+    """
+    if not configured:
+        return None
+    now = time.time()
+    cached = _credential_probe_cache.get("result")
+    expires_at = float(_credential_probe_cache.get("expires_at") or 0.0)
+    if cached is not None and expires_at > now:
+        return dict(cached)
+
+    result = {
+        "registration_required": False,
+        "registration_reason": None,
+        "registration_state": None,
+    }
+    module = _load_minio_sync_module()
+    if module is None or not hasattr(module, "get_client"):
+        _credential_probe_cache["result"] = dict(result)
+        _credential_probe_cache["expires_at"] = now + _CREDENTIAL_PROBE_TTL_SECONDS
+        return result
+    try:
+        client = module.get_client()
+        # Lightweight auth check: resolves against the configured bucket without
+        # traversing contents or querying usage stats.
+        client.bucket_exists(cfg["bucket"])
+    except Exception as exc:
+        if _looks_like_invalid_minio_credentials(exc):
+            result = {
+                "registration_required": True,
+                "registration_reason": "当前 MinIO AK/SK 校验失败，请重新注册或申请存储空间后再同步",
+                "registration_state": "credential_invalid",
+            }
+        else:
+            logger.debug("minio credential probe failed with non-auth error: %s", exc)
+    _credential_probe_cache["result"] = dict(result)
+    _credential_probe_cache["expires_at"] = now + _CREDENTIAL_PROBE_TTL_SECONDS
+    return result
 
 
 def _list_workspace_entries() -> list[dict[str, Any]]:
@@ -333,8 +403,12 @@ def _snapshot_status() -> dict[str, Any]:
     cfg = _public_config()
     configured, unavailable_reason = _config_completeness(cfg)
     register_url = _register_url()
+    registration = _probe_registration_requirement(cfg, configured)
+    registration_required = bool((registration or {}).get("registration_required"))
+    if registration_required:
+        unavailable_reason = str((registration or {}).get("registration_reason") or unavailable_reason or "") or None
     entries = _list_workspace_entries()
-    blocked_exts = _blocked_extensions() if configured else []
+    blocked_exts = _blocked_extensions() if configured and not registration_required else []
     with _lock:
         running = dict(_running)
         last = {lane: dict(v) if v else None for lane, v in _last_result.items()}
@@ -354,6 +428,8 @@ def _snapshot_status() -> dict[str, Any]:
     return {
         "config": cfg,
         "configured": configured,
+        "registration_required": registration_required,
+        "registration_state": (registration or {}).get("registration_state"),
         "unavailable_reason": unavailable_reason,
         "register_url": register_url,
         "workspace_entries": entries,

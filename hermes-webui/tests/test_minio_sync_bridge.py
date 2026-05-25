@@ -20,11 +20,15 @@ def _reset_state():
         for lane in bridge._LANES:
             bridge._running[lane] = False
             bridge._last_result[lane] = None
+    bridge._credential_probe_cache["expires_at"] = 0.0
+    bridge._credential_probe_cache["result"] = None
     yield
     with bridge._lock:
         for lane in bridge._LANES:
             bridge._running[lane] = False
             bridge._last_result[lane] = None
+    bridge._credential_probe_cache["expires_at"] = 0.0
+    bridge._credential_probe_cache["result"] = None
 
 
 def test_status_contains_safe_fields_only(monkeypatch):
@@ -155,6 +159,55 @@ def test_status_includes_register_url(monkeypatch):
     monkeypatch.setenv("HERMES_MINIO_REGISTER_URL", "https://example.invalid/register")
     status = bridge.get_status()
     assert status["register_url"] == "https://example.invalid/register"
+
+
+def test_status_marks_registration_required_when_credentials_invalid(monkeypatch):
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+    monkeypatch.setenv("HERMES_MINIO_REGISTER_URL", "https://example.invalid/register")
+
+    class AuthError(Exception):
+        code = "InvalidAccessKeyId"
+
+    class FakeClient:
+        def bucket_exists(self, _bucket):
+            raise AuthError("The Access Key Id you provided does not exist in our records")
+
+    fake_module = type("Fake", (), {})()
+    fake_module.get_client = lambda: FakeClient()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.get_blocked_extensions = lambda: frozenset({"pdf"})
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+
+    status = bridge.get_status()
+    assert status["configured"] is True
+    assert status["registration_required"] is True
+    assert status["registration_state"] == "credential_invalid"
+    assert "AK/SK" in (status["unavailable_reason"] or "")
+    assert status["blocked_extensions"] == []
+
+
+def test_status_keeps_configured_panel_when_probe_hits_non_auth_error(monkeypatch):
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+
+    class FakeClient:
+        def bucket_exists(self, _bucket):
+            raise RuntimeError("dial tcp 10.0.0.8:9000: i/o timeout")
+
+    fake_module = type("Fake", (), {})()
+    fake_module.get_client = lambda: FakeClient()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.get_blocked_extensions = lambda: frozenset({"pdf"})
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+
+    status = bridge.get_status()
+    assert status["configured"] is True
+    assert status["registration_required"] is False
+    assert status["registration_state"] is None
+    assert status["blocked_extensions"] == ["pdf"]
 
 
 def test_usage_includes_quota_total_used_remaining(monkeypatch):

@@ -2376,6 +2376,10 @@ function _renderMinioGuidance(payload) {
 function _renderMinioUnavailableCard(payload) {
   const reason = (payload && payload.unavailable_reason)
     || '此账户未启用 MinIO 同步';
+  const registrationRequired = !!(payload && payload.registration_required);
+  const sub = registrationRequired
+    ? '当前 MinIO 凭证无效，需重新注册或申请存储空间'
+    : '此账户当前未启用 MinIO 同步';
   const url = (payload && payload.register_url) || '';
   // Validate the URL scheme so a misconfigured env variable can't smuggle
   // javascript:/data: into the link target.
@@ -2388,7 +2392,7 @@ function _renderMinioUnavailableCard(payload) {
       <div class="minio-sync-head">
         <div>
           <div class="insights-card-title">MinIO 同步</div>
-          <div class="minio-sync-sub">${esc('此账户当前未启用 MinIO 同步')}</div>
+          <div class="minio-sync-sub">${esc(sub)}</div>
         </div>
         <span class="minio-sync-status minio-sync-status--off"><span class="minio-sync-dot" aria-hidden="true"></span>不可用</span>
       </div>
@@ -2403,7 +2407,8 @@ function _renderMinioSyncPanel(payload) {
   const cfg = payload.config || {};
   const isEnabled = !!cfg.enabled;
   const isConfigured = !!payload.configured;
-  if (!isEnabled || !isConfigured) {
+  const registrationRequired = !!payload.registration_required;
+  if (!isEnabled || !isConfigured || registrationRequired) {
     return _renderMinioUnavailableCard(payload);
   }
   const running = payload.running || {};
