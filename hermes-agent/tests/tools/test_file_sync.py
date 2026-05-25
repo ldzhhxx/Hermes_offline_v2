@@ -7,7 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.environments.file_sync import FileSyncManager, _FORCE_SYNC_ENV
+from tools.environments.file_sync import (
+    FileSyncManager,
+    _FORCE_SYNC_ENV,
+    _sync_progress,
+)
 
 
 @pytest.fixture
@@ -309,3 +313,52 @@ class TestBulkUpload:
         mgr.sync(force=True)
         bulk_upload.assert_called_once()
         assert len(bulk_upload.call_args[0][0]) == 3
+
+
+class TestProgressReporting:
+    def setup_method(self):
+        _sync_progress.update({
+            "active": False,
+            "stage": "idle",
+            "total": 0,
+            "completed": 0,
+            "deleted": 0,
+            "current_file": None,
+            "success": None,
+            "last_error": None,
+            "started_at": None,
+            "finished_at": None,
+        })
+
+    def test_reports_successful_progress_for_bulk_upload(self, tmp_files):
+        mgr = FileSyncManager(
+            get_files_fn=_make_get_files(tmp_files),
+            upload_fn=MagicMock(),
+            delete_fn=MagicMock(),
+            bulk_upload_fn=MagicMock(),
+        )
+
+        mgr.sync(force=True, _report_progress=True)
+
+        assert _sync_progress["active"] is False
+        assert _sync_progress["stage"] == "done"
+        assert _sync_progress["total"] == 3
+        assert _sync_progress["completed"] == 3
+        assert _sync_progress["success"] is True
+        assert _sync_progress["finished_at"] is not None
+
+    def test_reports_failure_and_error_message(self, tmp_files):
+        mgr = FileSyncManager(
+            get_files_fn=_make_get_files(tmp_files),
+            upload_fn=MagicMock(side_effect=RuntimeError("boom")),
+            delete_fn=MagicMock(),
+            bulk_upload_fn=None,
+        )
+
+        mgr.sync(force=True, _report_progress=True)
+
+        assert _sync_progress["active"] is False
+        assert _sync_progress["stage"] == "failed"
+        assert _sync_progress["success"] is False
+        assert _sync_progress["last_error"] == "boom"
+        assert _sync_progress["finished_at"] is not None

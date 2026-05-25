@@ -3354,6 +3354,9 @@ def handle_get(handler, parsed) -> bool:
             handler, {"workspaces": load_workspaces(), "last": get_last_workspace()}
         )
 
+    if parsed.path == "/api/workspace/sync-progress":
+        return _handle_workspace_sync_progress(handler)
+
     if parsed.path == "/api/workspaces/suggest":
         qs = parse_qs(parsed.query)
         prefix = qs.get("prefix", [""])[0]
@@ -4405,6 +4408,9 @@ def handle_post(handler, parsed) -> bool:
 
     if parsed.path == "/api/workspaces/reorder":
         return _handle_workspace_reorder(handler, body)
+
+    if parsed.path == "/api/workspace/sync":
+        return _handle_workspace_sync(handler, body)
 
     # ── Approval (POST) ──
     if parsed.path == "/api/approval/respond":
@@ -7374,6 +7380,80 @@ def _handle_workspace_reorder(handler, body):
             reordered.append(w)
     save_workspaces(reordered)
     return j(handler, {"ok": True, "workspaces": reordered})
+
+
+def _handle_workspace_sync_progress(handler):
+    """GET /api/workspace/sync-progress — return current file-sync progress state."""
+    try:
+        from tools.environments.file_sync import _sync_progress
+        return j(handler, dict(_sync_progress))
+    except ImportError:
+        return j(handler, {
+            "active": False, "stage": "unavailable",
+            "total": 0, "completed": 0, "deleted": 0,
+            "current_file": None, "success": None, "last_error": None,
+            "started_at": None, "finished_at": None,
+        })
+
+
+def _handle_workspace_sync(handler, body):
+    """POST /api/workspace/sync — trigger a forced file sync in a background thread.
+
+    Returns immediately with {"ok": true, "started": true} if a sync manager
+    is available, or {"ok": false, "reason": "..."} if no active environment
+    supports file sync (e.g. local/Docker backends that use bind mounts).
+    """
+    import threading as _threading
+
+    # Locate the active FileSyncManager from any running backend.
+    # SSH, Modal, and Daytona backends store their manager as _sync_manager
+    # on the environment instance, registered in terminal_tool._active_environments.
+    manager = None
+    try:
+        from tools.terminal_tool import _active_environments, _env_lock
+        with _env_lock:
+            envs = list(_active_environments.values())
+        for env in envs:
+            m = getattr(env, "_sync_manager", None)
+            if m is not None:
+                manager = m
+                break
+    except Exception:
+        pass
+
+    if manager is None:
+        # No active remote environment — still update progress to "done" so
+        # the UI shows a meaningful result rather than spinning forever.
+        try:
+            import tools.environments.file_sync as _fs_mod
+            _fs_mod._sync_progress.update({
+                "active": False, "stage": "unavailable",
+                "total": 0, "completed": 0, "deleted": 0,
+                "current_file": None, "success": None,
+                "last_error": "No active remote environment with file sync",
+                "started_at": None, "finished_at": None,
+            })
+        except Exception:
+            pass
+        return j(handler, {"ok": False, "reason": "No active remote environment with file sync"})
+
+    def _run():
+        try:
+            manager.sync(force=True, _report_progress=True)
+        except Exception as exc:
+            try:
+                import tools.environments.file_sync as _fs_mod
+                _fs_mod._sync_progress.update({
+                    "active": False, "stage": "failed",
+                    "current_file": None, "success": False,
+                    "last_error": str(exc), "finished_at": __import__("time").time(),
+                })
+            except Exception:
+                pass
+
+    t = _threading.Thread(target=_run, daemon=True, name="workspace-sync")
+    t.start()
+    return j(handler, {"ok": True, "started": True})
 
 
 def _handle_approval_respond(handler, body):

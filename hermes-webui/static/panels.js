@@ -3884,6 +3884,7 @@ function _setWorkspaceHeaderButtons(mode, ws){
   const delBtn = $('btnDeleteWorkspaceDetail');
   const cancelBtn = $('btnCancelWorkspaceDetail');
   const saveBtn = $('btnSaveWorkspaceDetail');
+  const syncBtn = $('btnSyncWorkspaceDetail');
   const show = b => b && (b.style.display = '');
   const hide = b => b && (b.style.display = 'none');
   if (mode === 'read') {
@@ -3892,12 +3893,13 @@ function _setWorkspaceHeaderButtons(mode, ws){
     const isDefault = !!(ws && ws.is_default);
     if (isActive) hide(actBtn); else show(actBtn);
     show(editBtn);
+    show(syncBtn);
     if (isDefault) hide(delBtn); else show(delBtn);
     hide(cancelBtn); hide(saveBtn);
   } else if (mode === 'create' || mode === 'edit') {
-    hide(actBtn); hide(editBtn); hide(delBtn); show(cancelBtn); show(saveBtn);
+    hide(actBtn); hide(editBtn); hide(delBtn); hide(syncBtn); show(cancelBtn); show(saveBtn);
   } else {
-    [actBtn, editBtn, delBtn, cancelBtn, saveBtn].forEach(hide);
+    [actBtn, editBtn, delBtn, cancelBtn, saveBtn, syncBtn].forEach(hide);
   }
 }
 
@@ -3930,6 +3932,87 @@ async function activateCurrentWorkspace(){
   // Re-render detail after activation so the active badge updates
   _renderWorkspaceDetail(_currentWorkspaceDetail);
 }
+
+// ── Workspace file sync with progress ──────────────────────────────────────
+
+let _syncPollTimer = null;
+
+async function syncCurrentWorkspace(){
+  const btn = $('btnSyncWorkspaceDetail');
+  if (!btn) return;
+  btn.disabled = true;
+
+  // Show inline progress area in the detail body
+  _showSyncProgress({active:true, stage:'starting', total:0, completed:0, deleted:0, current_file:null, success:null, last_error:null});
+
+  try {
+    const data = await api('/api/workspace/sync', {method:'POST', body:JSON.stringify({})});
+    if (!data.ok) {
+      _showSyncProgress({active:false, stage:'unavailable', success:null, last_error: data.reason || 'No active remote environment'});
+      btn.disabled = false;
+      return;
+    }
+  } catch(e) {
+    _showSyncProgress({active:false, stage:'failed', success:false, last_error: e.message});
+    btn.disabled = false;
+    return;
+  }
+
+  // Poll progress until done
+  if (_syncPollTimer) clearInterval(_syncPollTimer);
+  _syncPollTimer = setInterval(async () => {
+    try {
+      const prog = await api('/api/workspace/sync-progress');
+      _showSyncProgress(prog);
+      if (!prog.active && prog.stage !== 'starting') {
+        clearInterval(_syncPollTimer);
+        _syncPollTimer = null;
+        btn.disabled = false;
+      }
+    } catch(_) {
+      clearInterval(_syncPollTimer);
+      _syncPollTimer = null;
+      btn.disabled = false;
+    }
+  }, 400);
+}
+
+function _showSyncProgress(prog){
+  const body = $('workspaceDetailBody');
+  if (!body) return;
+  let el = body.querySelector('.ws-sync-progress');
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'ws-sync-progress';
+    el.style.cssText = 'margin:12px 0 0;padding:10px 12px;border-radius:6px;background:var(--surface2,#f5f5f5);font-size:12px;color:var(--text);';
+    body.insertBefore(el, body.firstChild);
+  }
+  const stage = prog.stage || 'idle';
+  const total = prog.total || 0;
+  const completed = prog.completed || 0;
+  const deleted = prog.deleted || 0;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : (prog.active ? 0 : 100);
+  const barColor = prog.success === false ? 'var(--danger,#e53e3e)' : prog.success === true ? 'var(--success,#38a169)' : 'var(--accent,#3b82f6)';
+  let label = '';
+  if (stage === 'starting') label = 'Starting sync…';
+  else if (stage === 'uploading') label = total > 0 ? `Uploading ${completed}/${total} file${total!==1?'s':''}…` : 'Uploading…';
+  else if (stage === 'deleting') label = `Cleaning up ${deleted} stale file${deleted!==1?'s':''}…`;
+  else if (stage === 'done') label = `Sync complete${total>0?` — ${total} file${total!==1?'s':''} uploaded`:''}${deleted>0?`, ${deleted} removed`:''}`;
+  else if (stage === 'failed') label = `Sync failed: ${prog.last_error || 'unknown error'}`;
+  else if (stage === 'unavailable') label = prog.last_error || 'No active remote environment';
+  else label = 'Idle';
+  const showBar = stage !== 'idle' && stage !== 'unavailable';
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:${showBar?'6px':'0'}">
+      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(label)}</span>
+      ${prog.active ? '<span style="opacity:.6;font-size:11px">…</span>' : ''}
+    </div>
+    ${showBar ? `<div style="height:4px;border-radius:2px;background:var(--border,#e2e8f0);overflow:hidden"><div style="height:100%;width:${pct}%;background:${barColor};transition:width .3s"></div></div>` : ''}
+    ${prog.current_file && prog.active ? `<div style="margin-top:4px;opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">${esc(prog.current_file.split('/').pop())}</div>` : ''}
+  `;
+}
+
+
 
 async function deleteCurrentWorkspace(){
   if (!_currentWorkspaceDetail) return;

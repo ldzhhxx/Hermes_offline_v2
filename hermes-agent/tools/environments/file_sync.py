@@ -42,6 +42,22 @@ _FORCE_SYNC_ENV = "HERMES_FORCE_FILE_SYNC"
 # Updated by FileSyncManager on every successful commit; read by web_server.
 _global_last_sync_wall_time: float = 0.0
 
+# Module-level progress state for the most recent manual sync trigger.
+# Keys: active, stage, total, completed, deleted, current_file, success,
+#       last_error, started_at, finished_at
+_sync_progress: dict = {
+    "active": False,
+    "stage": "idle",
+    "total": 0,
+    "completed": 0,
+    "deleted": 0,
+    "current_file": None,
+    "success": None,
+    "last_error": None,
+    "started_at": None,
+    "finished_at": None,
+}
+
 # Transport callbacks provided by each backend
 UploadFn = Callable[[str, str], None]  # (host_path, remote_path) -> raises on failure
 BulkUploadFn = Callable[[list[tuple[str, str]]], None]  # [(host_path, remote_path), ...] -> raises on failure
@@ -138,7 +154,7 @@ class FileSyncManager:
         self._last_sync_time: float = 0.0  # monotonic; 0 ensures first sync runs
         self._sync_interval = sync_interval
 
-    def sync(self, *, force: bool = False) -> None:
+    def sync(self, *, force: bool = False, _report_progress: bool = False) -> None:
         """Run a sync cycle: upload changed files, delete removed files.
 
         Rate-limited to once per ``sync_interval`` unless *force* is True
@@ -146,7 +162,12 @@ class FileSyncManager:
 
         Transactional: state only committed if ALL operations succeed.
         On failure, state rolls back so the next cycle retries everything.
+
+        When *_report_progress* is True the module-level ``_sync_progress``
+        dict is updated throughout the cycle so the WebUI can poll it.
         """
+        global _sync_progress, _global_last_sync_wall_time
+
         if not force and not os.environ.get(_FORCE_SYNC_ENV):
             now = time.monotonic()
             if now - self._last_sync_time < self._sync_interval:
@@ -172,11 +193,27 @@ class FileSyncManager:
 
         if not to_upload and not to_delete:
             self._last_sync_time = time.monotonic()
+            if _report_progress:
+                _sync_progress.update({
+                    "active": False, "stage": "done",
+                    "total": 0, "completed": 0, "deleted": 0,
+                    "current_file": None, "success": True, "last_error": None,
+                    "finished_at": time.time(),
+                })
             return
 
         # Snapshot for rollback (only when there's work to do)
         prev_files = dict(self._synced_files)
         prev_hashes = dict(self._pushed_hashes)
+
+        if _report_progress:
+            _sync_progress.update({
+                "active": True, "stage": "uploading",
+                "total": len(to_upload), "completed": 0,
+                "deleted": 0, "current_file": None,
+                "success": None, "last_error": None,
+                "started_at": time.time(), "finished_at": None,
+            })
 
         if to_upload:
             logger.debug("file_sync: uploading %d file(s)", len(to_upload))
@@ -185,15 +222,29 @@ class FileSyncManager:
 
         try:
             if to_upload and self._bulk_upload_fn is not None:
+                if _report_progress:
+                    _sync_progress["current_file"] = to_upload[0][0] if to_upload else None
                 self._bulk_upload_fn(to_upload)
+                if _report_progress:
+                    _sync_progress["completed"] = len(to_upload)
+                    _sync_progress["current_file"] = None
                 logger.debug("file_sync: bulk-uploaded %d file(s)", len(to_upload))
             else:
-                for host_path, remote_path in to_upload:
+                for i, (host_path, remote_path) in enumerate(to_upload):
+                    if _report_progress:
+                        _sync_progress["current_file"] = host_path
+                        _sync_progress["completed"] = i
                     self._upload_fn(host_path, remote_path)
+                    if _report_progress:
+                        _sync_progress["completed"] = i + 1
                     logger.debug("file_sync: uploaded %s -> %s", host_path, remote_path)
 
             if to_delete:
+                if _report_progress:
+                    _sync_progress["stage"] = "deleting"
                 self._delete_fn(to_delete)
+                if _report_progress:
+                    _sync_progress["deleted"] = len(to_delete)
                 logger.debug("file_sync: deleted %s", to_delete)
 
             # --- Commit (all succeeded) ---
@@ -206,14 +257,25 @@ class FileSyncManager:
 
             self._synced_files = new_files
             self._last_sync_time = time.monotonic()
-            global _global_last_sync_wall_time
             _global_last_sync_wall_time = time.time()
+            if _report_progress:
+                _sync_progress.update({
+                    "active": False, "stage": "done",
+                    "current_file": None, "success": True, "last_error": None,
+                    "finished_at": time.time(),
+                })
 
         except Exception as exc:
             self._synced_files = prev_files
             self._pushed_hashes = prev_hashes
             self._last_sync_time = time.monotonic()
             logger.warning("file_sync: sync failed, rolled back state: %s", exc)
+            if _report_progress:
+                _sync_progress.update({
+                    "active": False, "stage": "failed",
+                    "current_file": None, "success": False,
+                    "last_error": str(exc), "finished_at": time.time(),
+                })
 
     # ------------------------------------------------------------------
     # Sync-back: pull remote changes to host on teardown
