@@ -300,6 +300,28 @@ def _record_result(lane: str, payload: dict[str, Any]) -> None:
         _last_result[lane] = payload
 
 
+def _read_persisted_state_sync_result() -> dict[str, Any] | None:
+    """Read the durable state-sync result file written by the daemon or CLI.
+
+    Returns the parsed dict on success, or ``None`` if the file is absent or
+    unreadable.  Never raises.
+    """
+    module = _load_minio_sync_module()
+    if module is None:
+        return None
+    result_file = getattr(module, "STATE_SYNC_RESULT_FILE", None)
+    if result_file is None:
+        return None
+    try:
+        text = Path(result_file).read_text(encoding="utf-8")
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return None
+
+
 def _snapshot_status() -> dict[str, Any]:
     """Lightweight status snapshot — no bucket traversal or admin API calls.
 
@@ -315,6 +337,18 @@ def _snapshot_status() -> dict[str, Any]:
     with _lock:
         running = dict(_running)
         last = {lane: dict(v) if v else None for lane, v in _last_result.items()}
+    # The state lane can be updated by either:
+    # 1) this WebUI process (manual sync button) via _last_result["state"], or
+    # 2) the separate daemon / CLI process via the durable result file.
+    # Compare timestamps and surface whichever result is newer so automatic syncs
+    # continue advancing the UI even after a previous manual sync populated the
+    # in-process cache.
+    persisted_state = _read_persisted_state_sync_result()
+    current_state = last.get("state")
+    current_ts = float(current_state.get("finished_at") or 0) if isinstance(current_state, dict) else 0.0
+    persisted_ts = float(persisted_state.get("finished_at") or 0) if isinstance(persisted_state, dict) else 0.0
+    if persisted_state and persisted_ts > current_ts:
+        last["state"] = persisted_state
     script = _find_minio_sync_script()
     return {
         "config": cfg,

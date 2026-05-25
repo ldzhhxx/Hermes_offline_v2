@@ -85,6 +85,10 @@ SYNC_INCLUDES_HOME = [
 TARGET_UID = int(os.environ.get("HERMES_RUNTIME_UID", str(os.getuid())))
 TARGET_GID = int(os.environ.get("HERMES_RUNTIME_GID", str(os.getgid())))
 
+# Durable file written after every state sync so the WebUI bridge (a separate
+# process) can read the latest auto-sync result without needing shared memory.
+STATE_SYNC_RESULT_FILE = HERMES_HOME / ".minio_state_sync_last.json"
+
 # Sensitive files to NEVER sync
 SENSITIVE_PATTERNS = {
     ".env",
@@ -294,6 +298,36 @@ def _should_skip_safe_upload(client, object_name: str, local_path: Path) -> bool
 # ── Upload: state (lightweight, daemon + manual) ───────────────────────────
 
 
+def _persist_state_sync_result(result: dict) -> None:
+    """Write the latest state-sync result to a durable JSON file.
+
+    Both the daemon process and the WebUI bridge (a separate process) can read
+    this file so the UI always reflects the most recent auto-sync, not just
+    manually triggered ones.  Written atomically via a temp file so a reader
+    never sees a partial write.
+    """
+    payload = {**result, "finished_at": time.time()}
+    try:
+        STATE_SYNC_RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(
+            dir=str(STATE_SYNC_RESULT_FILE.parent),
+            prefix=".minio_state_sync_last_",
+            suffix=".json",
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            os.replace(tmp, STATE_SYNC_RESULT_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as exc:
+        log.debug("Failed to persist state sync result: %s", exc)
+
+
 def sync_state_to_minio() -> dict:
     """Upload only Hermes state (allowlist) to MinIO. Never touches workspace.
 
@@ -357,7 +391,9 @@ def sync_state_to_minio() -> dict:
                         errors.append(f"{rel}: {e}")
 
     log.info("State sync to MinIO complete: %d objects uploaded.", uploaded)
-    return {"mode": "state", "uploaded": uploaded, "errors": errors}
+    result = {"mode": "state", "uploaded": uploaded, "errors": errors}
+    _persist_state_sync_result(result)
+    return result
 
 
 # ── Workspace path validation + entry listing ──────────────────────────────
@@ -1014,6 +1050,12 @@ def run_daemon():
     signal.signal(signal.SIGINT, _handle_signal)
 
     log.info("Periodic state sync daemon started (interval=%ds; workspace excluded).", SYNC_INTERVAL)
+    # Perform an immediate sync so the WebUI shows a result right after startup
+    # instead of waiting a full interval.
+    try:
+        sync_state_to_minio()
+    except Exception as e:
+        log.error("Initial state sync failed: %s", e)
     while not _shutdown:
         time.sleep(SYNC_INTERVAL)
         if _shutdown:

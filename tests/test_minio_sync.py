@@ -1,7 +1,9 @@
 """Tests for scripts/minio_sync.py -- unit tests for logic not requiring live MinIO."""
+import json
 import sqlite3
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -812,3 +814,82 @@ def test_list_remote_files_empty_bucket(tmp_path, monkeypatch):
 
     files = minio_sync.list_remote_files(client=FakeClient())
     assert files == []
+
+
+# ── New: durable state-sync result persistence ─────────────────────────────
+
+
+def test_persist_state_sync_result_writes_json(tmp_path, monkeypatch):
+    """_persist_state_sync_result writes a readable JSON file atomically."""
+    monkeypatch.setattr(minio_sync, "STATE_SYNC_RESULT_FILE", tmp_path / ".minio_state_sync_last.json")
+    minio_sync._persist_state_sync_result({"mode": "state", "uploaded": 5, "errors": []})
+    data = json.loads((tmp_path / ".minio_state_sync_last.json").read_text(encoding="utf-8"))
+    assert data["mode"] == "state"
+    assert data["uploaded"] == 5
+    assert "finished_at" in data
+    assert isinstance(data["finished_at"], float)
+
+
+def test_persist_state_sync_result_is_called_by_sync_state(tmp_path, monkeypatch):
+    """sync_state_to_minio must call _persist_state_sync_result after a sync."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "SOUL.md").write_text("soul", encoding="utf-8")
+    monkeypatch.setattr(minio_sync, "HERMES_HOME", home)
+    monkeypatch.setattr(minio_sync, "HERMES_WORKSPACE", tmp_path / "workspace")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "")
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "STATE_SYNC_RESULT_FILE", tmp_path / ".minio_state_sync_last.json")
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    minio_sync.sync_state_to_minio()
+    assert (tmp_path / ".minio_state_sync_last.json").exists()
+
+
+def test_persist_state_sync_result_is_idempotent(tmp_path, monkeypatch):
+    """Calling _persist_state_sync_result twice overwrites cleanly."""
+    result_file = tmp_path / ".minio_state_sync_last.json"
+    monkeypatch.setattr(minio_sync, "STATE_SYNC_RESULT_FILE", result_file)
+    minio_sync._persist_state_sync_result({"mode": "state", "uploaded": 1, "errors": []})
+    minio_sync._persist_state_sync_result({"mode": "state", "uploaded": 7, "errors": []})
+    data = json.loads(result_file.read_text(encoding="utf-8"))
+    assert data["uploaded"] == 7
+
+
+def test_daemon_performs_immediate_sync_before_first_sleep(monkeypatch):
+    """run_daemon must call sync_state_to_minio immediately, not after sleeping."""
+    import threading
+
+    synced = threading.Event()
+    call_order: list[str] = []
+
+    def _fake_sync():
+        call_order.append("sync")
+        synced.set()
+        return {"mode": "state", "uploaded": 0, "errors": []}
+
+    def _fake_sleep(n):
+        call_order.append("sleep")
+        # After the first sleep call, trigger shutdown so the daemon exits.
+        minio_sync._shutdown = True
+
+    # signal.signal only works in the main thread; patch it out for this test.
+    monkeypatch.setattr(minio_sync.signal, "signal", lambda *a, **kw: None)
+    monkeypatch.setattr(minio_sync, "sync_state_to_minio", _fake_sync)
+    monkeypatch.setattr(minio_sync.time, "sleep", _fake_sleep)
+    minio_sync._shutdown = False
+
+    # Run daemon in a thread so we don't block the test.
+    t = threading.Thread(target=minio_sync.run_daemon, daemon=True)
+    t.start()
+    synced.wait(timeout=2.0)
+    t.join(timeout=3.0)
+
+    # The immediate sync must happen BEFORE the first sleep.
+    assert "sync" in call_order, "daemon must call sync_state_to_minio"
+    first_sync = call_order.index("sync")
+    first_sleep = call_order.index("sleep") if "sleep" in call_order else len(call_order)
+    assert first_sync < first_sleep, (
+        f"Expected sync before sleep, got order: {call_order}"
+    )

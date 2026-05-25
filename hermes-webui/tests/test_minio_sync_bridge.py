@@ -361,3 +361,118 @@ def test_get_remote_files_when_configured(monkeypatch):
     # Verify no home/ entries leak through
     paths = [f["path"] for f in res["files"]]
     assert not any(p.startswith("home/") for p in paths)
+
+
+# ── New: bridge reads durable state-sync result from daemon ────────────────
+
+
+def test_status_state_last_result_falls_back_to_durable_file(monkeypatch, tmp_path):
+    """When in-process _last_result['state'] is None, bridge reads the durable file."""
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+
+    # Write a fake durable result file as the daemon would.
+    import json as _json
+    result_file = tmp_path / ".minio_state_sync_last.json"
+    persisted = {"mode": "state", "uploaded": 3, "errors": [], "finished_at": 1700000000.0}
+    result_file.write_text(_json.dumps(persisted), encoding="utf-8")
+
+    # Fake module that exposes STATE_SYNC_RESULT_FILE pointing to our temp file.
+    fake_module = type("Fake", (), {})()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.get_blocked_extensions = lambda: frozenset()
+    fake_module.STATE_SYNC_RESULT_FILE = result_file
+
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+
+    # Ensure in-process state is empty (simulates fresh WebUI process).
+    with bridge._lock:
+        bridge._last_result["state"] = None
+
+    status = bridge.get_status()
+    last_state = status["last_result"]["state"]
+    assert last_state is not None, "bridge must surface daemon's durable result"
+    assert last_state["uploaded"] == 3
+    assert last_state["finished_at"] == 1700000000.0
+
+
+def test_status_state_in_process_result_takes_precedence_over_durable_file(
+    monkeypatch, tmp_path
+):
+    """In-process result (from a manual sync) must win over an older durable file."""
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+
+    import json as _json
+    result_file = tmp_path / ".minio_state_sync_last.json"
+    old_result = {"mode": "state", "uploaded": 1, "errors": [], "finished_at": 1000.0}
+    result_file.write_text(_json.dumps(old_result), encoding="utf-8")
+
+    fake_module = type("Fake", (), {})()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.get_blocked_extensions = lambda: frozenset()
+    fake_module.STATE_SYNC_RESULT_FILE = result_file
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+
+    # Simulate a more recent manual sync stored in-process.
+    newer_result = {"ok": True, "mode": "state", "uploaded": 9, "finished_at": 9999.0}
+    with bridge._lock:
+        bridge._last_result["state"] = newer_result
+
+    status = bridge.get_status()
+    last_state = status["last_result"]["state"]
+    assert last_state["uploaded"] == 9, "in-process result must take precedence"
+    assert last_state["finished_at"] == 9999.0
+
+
+def test_status_state_newer_durable_file_overrides_older_in_process_result(
+    monkeypatch, tmp_path
+):
+    """A newer daemon result must replace an older in-process manual result."""
+    monkeypatch.setenv("HERMES_MINIO_ENABLED", "true")
+    monkeypatch.setenv("HERMES_MINIO_ENDPOINT", "minio.example:9000")
+    monkeypatch.setenv("HERMES_MINIO_BUCKET", "hermes-state")
+
+    import json as _json
+    result_file = tmp_path / ".minio_state_sync_last.json"
+    newer_persisted = {"mode": "state", "uploaded": 4, "errors": [], "finished_at": 2000.0}
+    result_file.write_text(_json.dumps(newer_persisted), encoding="utf-8")
+
+    fake_module = type("Fake", (), {})()
+    fake_module.list_workspace_entries = lambda: []
+    fake_module.get_blocked_extensions = lambda: frozenset()
+    fake_module.STATE_SYNC_RESULT_FILE = result_file
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+
+    with bridge._lock:
+        bridge._last_result["state"] = {"ok": True, "mode": "state", "uploaded": 2, "finished_at": 1000.0}
+
+    status = bridge.get_status()
+    last_state = status["last_result"]["state"]
+    assert last_state["uploaded"] == 4, "newer durable auto-sync result must win"
+    assert last_state["finished_at"] == 2000.0
+
+
+def test_read_persisted_state_sync_result_returns_none_when_file_missing(monkeypatch):
+    """_read_persisted_state_sync_result returns None gracefully when file absent."""
+    from pathlib import Path as _Path
+    fake_module = type("Fake", (), {})()
+    fake_module.STATE_SYNC_RESULT_FILE = _Path("/nonexistent/path/.minio_state_sync_last.json")
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+    result = bridge._read_persisted_state_sync_result()
+    assert result is None
+
+
+def test_read_persisted_state_sync_result_returns_none_on_corrupt_json(
+    monkeypatch, tmp_path
+):
+    """Corrupt JSON in the durable file must not crash the bridge."""
+    result_file = tmp_path / ".minio_state_sync_last.json"
+    result_file.write_text("{not valid json", encoding="utf-8")
+    fake_module = type("Fake", (), {})()
+    fake_module.STATE_SYNC_RESULT_FILE = result_file
+    monkeypatch.setattr(bridge, "_load_minio_sync_module", lambda: fake_module)
+    result = bridge._read_persisted_state_sync_result()
+    assert result is None
