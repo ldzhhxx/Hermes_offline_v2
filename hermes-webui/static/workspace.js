@@ -58,8 +58,31 @@ function _restoreExpandedDirs(){
   }catch(e){S._expandedDirs=new Set();}
 }
 
+async function _ensureWorkspaceBrowseSession(){
+  if(S.session&&S.session.session_id) return true;
+  const ws=(typeof S._profileDefaultWorkspace==='string'&&S._profileDefaultWorkspace)||'';
+  if(!ws) return false;
+  try{
+    const r=await api('/api/session/new',{method:'POST',body:JSON.stringify({workspace:ws})});
+    if(!(r&&r.session)) return false;
+    S.session=r.session;
+    S.messages=r.session.messages||[];
+    S.lastUsage={...(r.session.last_usage||{})};
+    S.busy=false;
+    S.activeStreamId=null;
+    try{localStorage.setItem('hermes-webui-session',S.session.session_id);}catch(_){ }
+    if(typeof syncTopbar==='function') syncTopbar();
+    if(typeof renderMessages==='function') renderMessages();
+    if(typeof renderSessionList==='function') await renderSessionList();
+    return true;
+  }catch(e){
+    console.warn('ensureWorkspaceBrowseSession',e);
+    return false;
+  }
+}
+
 async function loadDir(path){
-  if(!S.session)return;
+  if(!S.session&&!(await _ensureWorkspaceBrowseSession()))return;
   try{
     if(!path||path==='.'){
       S._dirCache={};
@@ -226,7 +249,7 @@ function cancelEditMode(){
 }
 
 async function openFile(path){
-  if(!S.session)return;
+  if(!S.session&&!(await _ensureWorkspaceBrowseSession()))return;
   const ext=fileExt(path);
 
   // Binary/download-only formats: trigger browser download, don't preview

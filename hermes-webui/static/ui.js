@@ -6604,7 +6604,8 @@ function renderFileTree(){
   S._dirCache[S.currentDir||'.']=S.entries;
   // Show empty-state when no workspace is set or the directory is empty (#703)
   const emptyEl=$('wsEmptyState');
-  const hasWorkspace=!!(S.session&&S.session.workspace);
+  const fallbackWorkspace=!!((!S.session)&&S._profileDefaultWorkspace);
+  const hasWorkspace=!!((S.session&&S.session.workspace)||fallbackWorkspace);
   if(!hasWorkspace){
     if(emptyEl){emptyEl.textContent=t('workspace_empty_no_path');emptyEl.style.display='flex';}
     box.style.display='none';
