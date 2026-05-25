@@ -822,9 +822,11 @@ def test_list_remote_files_empty_bucket(tmp_path, monkeypatch):
 def test_persist_state_sync_result_writes_json(tmp_path, monkeypatch):
     """_persist_state_sync_result writes a readable JSON file atomically."""
     monkeypatch.setattr(minio_sync, "STATE_SYNC_RESULT_FILE", tmp_path / ".minio_state_sync_last.json")
-    minio_sync._persist_state_sync_result({"mode": "state", "uploaded": 5, "errors": []})
+    payload = minio_sync._persist_state_sync_result({"mode": "state", "uploaded": 5, "errors": []})
     data = json.loads((tmp_path / ".minio_state_sync_last.json").read_text(encoding="utf-8"))
+    assert data == payload
     assert data["mode"] == "state"
+    assert data["ok"] is True
     assert data["uploaded"] == 5
     assert "finished_at" in data
     assert isinstance(data["finished_at"], float)
@@ -843,7 +845,9 @@ def test_persist_state_sync_result_is_called_by_sync_state(tmp_path, monkeypatch
     fake = _RecordingClient()
     monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
 
-    minio_sync.sync_state_to_minio()
+    result = minio_sync.sync_state_to_minio()
+    assert result["ok"] is True
+    assert isinstance(result["finished_at"], float)
     assert (tmp_path / ".minio_state_sync_last.json").exists()
 
 

@@ -11,6 +11,7 @@ ARG NPM_REGISTRY="https://registry.npmmirror.com"
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Shanghai \
     HERMES_HOME=/home/hermes/.hermes \
     HERMES_WORKSPACE=/home/hermes/workspace \
     HERMES_AGENT_HOST=0.0.0.0 \
@@ -31,6 +32,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 WORKDIR /opt/hermes-offline
 
 RUN set -eux; \
+    if [ -f "/usr/share/zoneinfo/$TZ" ]; then \
+      ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime; \
+      echo "$TZ" > /etc/timezone; \
+    fi; \
     if [ -n "$APT_MIRROR" ]; then \
       echo "Using custom APT mirror: $APT_MIRROR"; \
       if [ -f /etc/apt/sources.list ]; then \

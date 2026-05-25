@@ -395,18 +395,21 @@ class TestMinioGuidanceAndBlockedExtensions:
 
 
 class TestMinioTimestampAndIntervalDisplay:
-    """Tests for China-timezone timestamps and auto-sync interval display."""
+    """Tests for MinIO panel relative-time display and auto-sync interval text."""
 
-    def test_timestamp_uses_asia_shanghai(self):
+    def test_minio_timestamp_uses_shared_relative_formatter(self):
         js = _read("static/panels.js")
-        assert "Asia/Shanghai" in js, (
-            "_formatMinioTimestamp must use Asia/Shanghai timezone."
+        assert "function _formatMinioRelativeTimestamp" in js, (
+            "MinIO panel should expose a relative-time formatter for sync timestamps."
+        )
+        assert "_formatSyncRelativeTime" in js, (
+            "MinIO panel should reuse the shared Chinese relative-time formatter."
         )
 
-    def test_timestamp_uses_zh_cn_locale(self):
+    def test_minio_result_timestamp_keeps_absolute_time_in_tooltip(self):
         js = _read("static/panels.js")
-        assert "zh-CN" in js, (
-            "_formatMinioTimestamp must use zh-CN locale for Chinese formatting."
+        assert "title=\"${esc(tsTitle)}\"" in js, (
+            "Rendered MinIO sync result timestamps should keep the absolute time in a tooltip."
         )
 
     def test_state_row_shows_sync_interval(self):
@@ -422,6 +425,9 @@ class TestMinioTimestampAndIntervalDisplay:
         js = _read("static/panels.js")
         assert "上次同步" in js, (
             "The Hermes state row must show last sync time in Chinese."
+        )
+        assert "_formatMinioRelativeTimestamp(last.state.finished_at)" in js, (
+            "The Hermes state row should use relative time as the primary visible timestamp."
         )
 
     def test_backend_exposes_sync_interval(self):

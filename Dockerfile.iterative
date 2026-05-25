@@ -29,10 +29,16 @@ ARG PIP_TRUSTED_HOST=""
 ARG NPM_REGISTRY=""
 ARG REINSTALL_DEPS=""
 
+ENV TZ=Asia/Shanghai
+
 WORKDIR /opt/hermes-offline
 
 # Configure intranet mirrors (only if provided)
 RUN set -eux; \
+    if [ -f "/usr/share/zoneinfo/$TZ" ]; then \
+      ln -snf "/usr/share/zoneinfo/$TZ" /etc/localtime; \
+      echo "$TZ" > /etc/timezone; \
+    fi; \
     if [ -n "$APT_MIRROR" ]; then \
       echo "Using custom APT mirror: $APT_MIRROR"; \
       if [ -f /etc/apt/sources.list ]; then \

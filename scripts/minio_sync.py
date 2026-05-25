@@ -298,15 +298,22 @@ def _should_skip_safe_upload(client, object_name: str, local_path: Path) -> bool
 # ── Upload: state (lightweight, daemon + manual) ───────────────────────────
 
 
-def _persist_state_sync_result(result: dict) -> None:
+def _persist_state_sync_result(result: dict) -> dict:
     """Write the latest state-sync result to a durable JSON file.
 
     Both the daemon process and the WebUI bridge (a separate process) can read
     this file so the UI always reflects the most recent auto-sync, not just
     manually triggered ones.  Written atomically via a temp file so a reader
     never sees a partial write.
+
+    Returns the normalized payload so callers can reuse the exact same
+    ``finished_at`` / ``ok`` fields in subprocess output and UI state.
     """
-    payload = {**result, "finished_at": time.time()}
+    payload = {
+        **result,
+        "ok": bool(result.get("ok", True)),
+        "finished_at": float(result.get("finished_at") or time.time()),
+    }
     try:
         STATE_SYNC_RESULT_FILE.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(
@@ -326,6 +333,7 @@ def _persist_state_sync_result(result: dict) -> None:
             raise
     except Exception as exc:
         log.debug("Failed to persist state sync result: %s", exc)
+    return payload
 
 
 def sync_state_to_minio() -> dict:
@@ -391,9 +399,8 @@ def sync_state_to_minio() -> dict:
                         errors.append(f"{rel}: {e}")
 
     log.info("State sync to MinIO complete: %d objects uploaded.", uploaded)
-    result = {"mode": "state", "uploaded": uploaded, "errors": errors}
-    _persist_state_sync_result(result)
-    return result
+    result = {"ok": True, "mode": "state", "uploaded": uploaded, "errors": errors}
+    return _persist_state_sync_result(result)
 
 
 # ── Workspace path validation + entry listing ──────────────────────────────

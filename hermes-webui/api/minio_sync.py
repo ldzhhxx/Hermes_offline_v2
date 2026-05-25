@@ -295,7 +295,8 @@ def _is_running(lane: str) -> bool:
 
 
 def _record_result(lane: str, payload: dict[str, Any]) -> None:
-    payload = {**payload, "finished_at": time.time()}
+    payload = dict(payload)
+    payload.setdefault("finished_at", time.time())
     with _lock:
         _last_result[lane] = payload
 

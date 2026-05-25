@@ -130,6 +130,14 @@ def test_record_result_attaches_finished_at():
     assert abs(time.time() - last["finished_at"]) < 5
 
 
+def test_record_result_preserves_existing_finished_at():
+    bridge._record_result("state", {"ok": True, "finished_at": 1234.5})
+    snap = bridge.get_status()
+    last = snap["last_result"]["state"]
+    assert last is not None
+    assert last["finished_at"] == 1234.5
+
+
 # ── New behavior: status payload extras + path validation ──────────────────
 
 
@@ -375,7 +383,7 @@ def test_status_state_last_result_falls_back_to_durable_file(monkeypatch, tmp_pa
     # Write a fake durable result file as the daemon would.
     import json as _json
     result_file = tmp_path / ".minio_state_sync_last.json"
-    persisted = {"mode": "state", "uploaded": 3, "errors": [], "finished_at": 1700000000.0}
+    persisted = {"ok": True, "mode": "state", "uploaded": 3, "errors": [], "finished_at": 1700000000.0}
     result_file.write_text(_json.dumps(persisted), encoding="utf-8")
 
     # Fake module that exposes STATE_SYNC_RESULT_FILE pointing to our temp file.
@@ -393,6 +401,7 @@ def test_status_state_last_result_falls_back_to_durable_file(monkeypatch, tmp_pa
     status = bridge.get_status()
     last_state = status["last_result"]["state"]
     assert last_state is not None, "bridge must surface daemon's durable result"
+    assert last_state["ok"] is True
     assert last_state["uploaded"] == 3
     assert last_state["finished_at"] == 1700000000.0
 
@@ -437,7 +446,7 @@ def test_status_state_newer_durable_file_overrides_older_in_process_result(
 
     import json as _json
     result_file = tmp_path / ".minio_state_sync_last.json"
-    newer_persisted = {"mode": "state", "uploaded": 4, "errors": [], "finished_at": 2000.0}
+    newer_persisted = {"ok": True, "mode": "state", "uploaded": 4, "errors": [], "finished_at": 2000.0}
     result_file.write_text(_json.dumps(newer_persisted), encoding="utf-8")
 
     fake_module = type("Fake", (), {})()
@@ -451,6 +460,7 @@ def test_status_state_newer_durable_file_overrides_older_in_process_result(
 
     status = bridge.get_status()
     last_state = status["last_result"]["state"]
+    assert last_state["ok"] is True
     assert last_state["uploaded"] == 4, "newer durable auto-sync result must win"
     assert last_state["finished_at"] == 2000.0
 

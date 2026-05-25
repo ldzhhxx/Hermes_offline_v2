@@ -2271,11 +2271,22 @@ function _formatMinioBytes(bytes) {
   const decimals = value < 10 ? 2 : (value < 100 ? 1 : 0);
   return `${value.toFixed(decimals)} ${units[idx]}`;
 }
-function _formatMinioTimestamp(epoch) {
+function _formatMinioAbsoluteTimestamp(epoch) {
   if (!epoch) return '';
   try {
-    return new Date(epoch * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    if (typeof _formatSyncAbsoluteTime === 'function') return _formatSyncAbsoluteTime(epoch);
+    return new Date(epoch * 1000).toLocaleString('zh-CN', { hour12: false });
   } catch (_) { return ''; }
+}
+function _formatMinioRelativeTimestamp(epoch) {
+  if (!epoch) return '';
+  try {
+    if (typeof _formatSyncRelativeTime === 'function') return _formatSyncRelativeTime(epoch);
+    return _formatMinioAbsoluteTimestamp(epoch);
+  } catch (_) { return ''; }
+}
+function _formatMinioTimestamp(epoch) {
+  return _formatMinioRelativeTimestamp(epoch);
 }
 function _minioSyncSummary(result) {
   if (!result) return '尚未执行同步';
@@ -2299,8 +2310,9 @@ function _renderMinioSyncResult(lane, result) {
     return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}">尚未执行 ${lane} 同步</div>`;
   }
   const klass = result.ok ? 'ok' : 'err';
-  const ts = _formatMinioTimestamp(result.finished_at);
-  const tsBlock = ts ? `<span class="minio-sync-result-ts">${esc(ts)}</span>` : '';
+  const ts = _formatMinioRelativeTimestamp(result.finished_at);
+  const tsTitle = _formatMinioAbsoluteTimestamp(result.finished_at);
+  const tsBlock = ts ? `<span class="minio-sync-result-ts"${tsTitle ? ` title="${esc(tsTitle)}"` : ''}>${esc(ts)}</span>` : '';
   return `<div class="minio-sync-result minio-sync-result--${klass}" data-lane="${lane}">
     <span class="minio-sync-result-summary">${esc(_minioSyncSummary(result))}</span>
     ${tsBlock}
@@ -2481,7 +2493,7 @@ function _renderMinioSyncPanel(payload) {
         <div class="minio-sync-row">
           <div class="minio-sync-row-info">
             <div class="minio-sync-row-title">Hermes 状态</div>
-            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步一次，无需手动操作；此按钮可立即触发一次。${last.state && last.state.finished_at ? '上次同步：' + esc(_formatMinioTimestamp(last.state.finished_at)) : ''}</div>
+            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步一次，无需手动操作；此按钮可立即触发一次。${last.state && last.state.finished_at ? (() => { const rel = _formatMinioRelativeTimestamp(last.state.finished_at); const abs = _formatMinioAbsoluteTimestamp(last.state.finished_at); return rel ? '上次同步：' + `<span${abs ? ` title="${esc(abs)}"` : ''}>${esc(rel)}</span>` : ''; })() : ''}</div>
             ${_renderMinioSyncResult('state', last.state)}
           </div>
           <div class="minio-sync-row-actions">
