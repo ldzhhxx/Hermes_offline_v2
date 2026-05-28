@@ -4976,6 +4976,12 @@ def handle_post(handler, parsed) -> bool:
         status = 200 if result.get("ok") else 409
         return j(handler, result, status=status)
 
+    if parsed.path == "/api/minio/purge-and-stop":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.purge_and_stop()
+        status = 200 if result.get("ok") else 500
+        return j(handler, result, status=status)
+
     return False  # 404
 
 

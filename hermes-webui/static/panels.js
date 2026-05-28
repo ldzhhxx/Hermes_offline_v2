@@ -2536,6 +2536,17 @@ function _renderMinioSyncPanel(payload) {
           </div>
         </div>
         <div class="minio-remote-files" id="minioRemoteFiles" hidden></div>
+
+        <div class="minio-sync-row minio-sync-row--purge">
+          <div class="minio-sync-row-info">
+            <div class="minio-sync-row-title">清除数据并停止同步</div>
+            <div class="minio-sync-row-sub">删除 MinIO 中该前缀下的所有对象，并停止后台同步守护进程。<strong>此操作不可撤销。</strong></div>
+            <div id="minioPurgeResult"></div>
+          </div>
+          <div class="minio-sync-row-actions">
+            <button type="button" class="minio-sync-btn minio-sync-btn--danger" id="minioPurgeBtn" onclick="triggerMinioPurgeAndStop()">清除数据并停止同步</button>
+          </div>
+        </div>
       </details>
     </section>`;
 }
@@ -2818,6 +2829,31 @@ async function triggerMinioBrowseRemote() {
 // Legacy compat: keep old name so existing tests still pass
 async function triggerMinioWorkspaceSync() {
   return triggerMinioUploadSelected();
+}
+
+async function triggerMinioPurgeAndStop() {
+  if (!confirm('确认清除所有 MinIO 同步数据并停止同步？此操作不可撤销。')) return;
+  const btn = document.getElementById('minioPurgeBtn');
+  const resultEl = document.getElementById('minioPurgeResult');
+  if (btn) { btn.disabled = true; btn.textContent = '清除中…'; }
+  if (resultEl) resultEl.innerHTML = '';
+  try {
+    const resp = await fetch('/api/minio/purge-and-stop', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const data = await resp.json();
+    if (resultEl) {
+      const details = data.details || {};
+      const deleted = details.deleted_count !== undefined ? `已删除 ${details.deleted_count} 个对象` : '';
+      const msg = data.ok
+        ? `清除成功${deleted ? '，' + deleted : ''}。`
+        : `清除失败：${data.error || '未知错误'}`;
+      const cls = data.ok ? 'minio-sync-result--ok' : 'minio-sync-result--err';
+      resultEl.innerHTML = `<div class="minio-sync-result ${cls}"><span class="minio-sync-result-summary">${esc(msg)}</span></div>`;
+    }
+  } catch (e) {
+    if (resultEl) resultEl.innerHTML = `<div class="minio-sync-result minio-sync-result--err"><span class="minio-sync-result-summary">${esc('请求失败：' + e.message)}</span></div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '清除数据并停止同步'; }
+  }
 }
 
 function _renderLlmWikiStatus(d) {

@@ -616,6 +616,26 @@ def trigger_state_sync() -> dict[str, Any]:
     return _spawn_lane("state", ["sync-state"])
 
 
+def purge_and_stop() -> dict[str, Any]:
+    """Purge all objects under MINIO_PREFIX and stop the background sync daemon."""
+    cfg = _public_config()
+    configured, unavailable_reason = _config_completeness(cfg)
+    if not configured:
+        return {"ok": False, "error": unavailable_reason or "MinIO 同步未配置"}
+
+    result = _run_subprocess(["purge", "--confirm"], timeout=120.0)
+
+    # Stop the background daemon if running (signal via PID file)
+    module = _load_minio_sync_module()
+    if module is not None and hasattr(module, "stop_daemon"):
+        try:
+            module.stop_daemon()
+        except Exception as exc:
+            logger.debug("stop_daemon failed: %s", exc)
+
+    return result
+
+
 def trigger_workspace_sync(
     mode: str = "safe",
     cleanup_remote: bool = False,
