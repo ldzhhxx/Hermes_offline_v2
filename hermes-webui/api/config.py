@@ -2176,7 +2176,8 @@ def _offline_filter_models(result: dict) -> dict:
       - get_providers() in api/providers.py _OFFLINE_VISIBLE_PROVIDERS (point 3/3)
     """
     _YICE_PROVIDERS = {"yice", "custom:yice"}
-    _DEFAULT_MODEL = "Qwen3.5-397B-A17B"
+    _configured_default = str((cfg.get("model", {}) or {}).get("default", "")).strip()
+    _DEFAULT_MODEL = _configured_default or "Qwen3.5-397B-A17B"
     all_groups = result.get("groups") or []
     # Keep yice/custom:yice groups AND any user-added custom:* groups
     filtered = [
@@ -3283,7 +3284,8 @@ def get_available_models() -> dict:
         # 离线版：只向前端暴露 yice provider 及用户自行添加的 custom:* providers
         # ── MODEL VISIBILITY CONTROL POINT 2/3 ──
         _OFFLINE_ONLY_PROVIDER = "yice"
-        _OFFLINE_ONLY_MODEL = "Qwen3.5-397B-A17B"
+        _configured_default = str((cfg.get("model", {}) or {}).get("default", "")).strip()
+        _OFFLINE_ONLY_MODEL = _configured_default or "Qwen3.5-397B-A17B"
         _YICE_IDS = {_OFFLINE_ONLY_PROVIDER, "custom:yice"}
         groups = [
             g for g in groups
