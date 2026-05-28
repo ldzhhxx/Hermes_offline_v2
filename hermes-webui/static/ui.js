@@ -822,8 +822,13 @@ async function populateModelDropdown(){
       }
       sel.appendChild(og);
     }
-    // Set default model from server if no localStorage preference
-    if(data.default_model && !(typeof _readPersistedModelState==='function'&&_readPersistedModelState()) && !localStorage.getItem('hermes-webui-model')){
+    // config.yaml is the authoritative model source on every page load.
+    // Clear any persisted selection from a previous session so the server's
+    // default_model always wins at startup; the user can still switch models
+    // within the current session (the change handler re-writes localStorage).
+    if(data.default_model){
+      localStorage.removeItem('hermes-webui-model');
+      localStorage.removeItem(MODEL_STATE_KEY);
       _applyModelToDropdown(data.default_model, sel, data.active_provider||null);
     }
     if(typeof syncModelChip==='function') syncModelChip();
