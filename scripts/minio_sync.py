@@ -444,8 +444,14 @@ def purge_minio_prefix(confirm: bool = False) -> dict:
     if not MINIO_BUCKET:
         return {"ok": False, "error": "MINIO_BUCKET not configured"}
 
+    if not MINIO_PREFIX:
+        return {
+            "ok": False,
+            "error": "HERMES_MINIO_PREFIX is empty; refusing to purge entire bucket. Set HERMES_MINIO_PREFIX to target a specific prefix.",
+        }
+
     client = get_client()
-    prefix = object_key("") if MINIO_PREFIX else ""
+    prefix = object_key("")
 
     # 列出所有对象
     try:
