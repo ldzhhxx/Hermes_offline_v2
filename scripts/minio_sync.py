@@ -113,6 +113,9 @@ WORKSPACE_MODES = (WORKSPACE_MODE_SAFE, WORKSPACE_MODE_MIRROR)
 # Comma-separated, case-insensitive, leading dots optional.
 _DEFAULT_BLOCKED_EXTENSIONS = "doc,docx,ppt,pptx,xls,xlsx"
 
+# Bucket capacity limit (bytes). Sync is refused when used > max.
+MINIO_MAX_BYTES = int(os.environ.get("HERMES_MINIO_MAX_BYTES", str(10 * 1024 * 1024 * 1024)))
+
 
 def _parse_blocked_extensions(raw: str) -> frozenset[str]:
     """Parse a comma-separated extension list into a normalized frozenset.
@@ -481,17 +484,101 @@ def _persist_state_sync_result(result: dict) -> dict:
     return payload
 
 
+def _check_disk_space(path: Path, min_bytes: int = 50 * 1024 * 1024) -> bool:
+    """Check if at least min_bytes are available on the filesystem containing path."""
+    try:
+        st = os.statvfs(path)
+        avail = st.f_bavail * st.f_frsize
+        return avail >= min_bytes
+    except OSError:
+        return False
+
+
+# Persistent reference snapshot for incremental rsync (survives across syncs)
+_SNAPSHOT_REF_DIR = HERMES_HOME / '.minio_snapshot_ref'
+
+
+def _incremental_snapshot(src_dir: Path, snap_dir: Path, ref_dir: Path | None,
+                          exclude_sensitive: bool = True) -> bool:
+    """Create a consistent snapshot of src_dir using rsync with --link-dest.
+
+    If ref_dir exists, rsync will hardlink unchanged files from ref_dir (zero
+    copy cost) and only copy files that changed since last sync. This keeps
+    disk overhead proportional to the delta, not the total size.
+
+    The snapshot is a true copy (not hardlinks to src), so concurrent writes
+    to src_dir do NOT affect the snapshot. Individual files may be captured
+    mid-write (torn), but this is bounded to files actively being written
+    during the ~millisecond rsync traversal — far better than the old approach
+    where mc mirror could read torn files over a multi-second window.
+
+    Returns True on success.
+    """
+    snap_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        'rsync', '-a', '--delete',
+        '--timeout=30',
+    ]
+
+    if ref_dir and ref_dir.is_dir():
+        cmd.extend(['--link-dest', str(ref_dir)])
+
+    if exclude_sensitive:
+        for pat in SENSITIVE_PATHS:
+            cmd.extend(['--exclude', pat])
+        # Exclude SQLite WAL/SHM/journal
+        cmd.extend([
+            '--exclude', '*.db-wal',
+            '--exclude', '*.db-shm',
+            '--exclude', '*.db-journal',
+        ])
+
+    cmd.extend([str(src_dir).rstrip('/') + '/', str(snap_dir).rstrip('/') + '/'])
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode not in (0, 24):  # 24 = "vanished source files" (OK)
+        log.warning('rsync snapshot failed (rc=%d): %s',
+                    result.returncode, result.stderr.strip()[:300])
+        return False
+    return True
+
+
+def _check_bucket_quota_before_sync() -> dict | None:
+    """Return an error dict if prefix usage exceeds MINIO_MAX_BYTES, else None."""
+    if MINIO_MAX_BYTES <= 0:
+        return None
+    try:
+        used = compute_prefix_used_bytes()
+    except Exception:
+        return None
+    if used > MINIO_MAX_BYTES:
+        return {'ok': False, 'error': 'bucket quota exceeded', 'used_bytes': used, 'max_bytes': MINIO_MAX_BYTES}
+    return None
+
+
 def sync_state_to_minio() -> dict:
-    """Upload only Hermes state (allowlist) to MinIO using mc mirror.
+    """Upload Hermes state (allowlist) to MinIO with consistent snapshots.
+
+    Strategy:
+    - SQLite: backup API (already safe)
+    - Directories: rsync to a temp snapshot dir with --link-dest referencing
+      the previous snapshot. This gives a true copy (immune to concurrent
+      writes) with disk cost proportional only to changed files.
+    - Single files: direct copy to staging (trivial size)
+    - Degraded mode: if disk is too low or rsync unavailable, falls back to
+      direct mc mirror (old behavior, less consistent but still functional).
 
     Returns a result dict: {"uploaded": int, "errors": [str], "mode": "state"}.
     """
     log.debug('sync_state_to_minio: SYNC_INCLUDES_HOME=%s', SYNC_INCLUDES_HOME)
     log.debug('sync_state_to_minio: SENSITIVE_PATHS=%s', SENSITIVE_PATHS)
 
-    # Fall back to Python SDK path when mc is not available (tests / no mc binary)
-    mc_available = subprocess.run(['which', 'mc'], capture_output=True).returncode == 0
+    quota_err = _check_bucket_quota_before_sync()
+    if quota_err:
+        return quota_err
 
+    mc_available = subprocess.run(['which', 'mc'], capture_output=True).returncode == 0
     if not mc_available:
         return _sync_state_to_minio_sdk()
 
@@ -503,16 +590,24 @@ def sync_state_to_minio() -> dict:
 
     bucket_path = f'{alias}/{MINIO_BUCKET}'
     prefix_path = f'{bucket_path}/{MINIO_PREFIX}' if MINIO_PREFIX else bucket_path
-    exclude_args = list(SENSITIVE_PATHS)  # exact filenames for --exclude
+    exclude_args = list(SENSITIVE_PATHS)
 
     uploaded = 0
     errors: list[str] = []
     sqlite_dbs = ['state.db', 'kanban.db', 'response_store.db']
 
+    # Check prerequisites for snapshot mode
+    can_snapshot = (
+        _check_disk_space(HERMES_HOME, min_bytes=50 * 1024 * 1024)
+        and subprocess.run(['which', 'rsync'], capture_output=True).returncode == 0
+    )
+    if not can_snapshot:
+        log.warning('Snapshot mode unavailable (low disk or no rsync) — using direct mirror')
+
     with tempfile.TemporaryDirectory(prefix='hermes_sync_') as tmpdir:
         tmp = Path(tmpdir)
 
-        # SQLite: safe backup first, then mc mirror the temp dir
+        # ── Phase 1: SQLite safe backup ──
         db_tmp = tmp / 'dbs'
         db_tmp.mkdir()
         for db_name in sqlite_dbs:
@@ -521,48 +616,99 @@ def sync_state_to_minio() -> dict:
                 backup_path = db_tmp / db_name
                 try:
                     safe_sqlite_backup(db_path, backup_path)
-                    res = _mc_mirror(
-                        str(db_tmp) + '/',
-                        f'{prefix_path}/home/',
-                        overwrite=True,
-                        exclude=None,
-                    )
-                    if res['ok']:
-                        uploaded += 1
-                    else:
-                        errors.append(f'{db_name}: mc mirror failed')
-                    break  # mirror the whole db_tmp dir once
                 except Exception as e:
-                    log.warning('Failed to backup/mirror %s: %s', db_name, e)
+                    log.warning('Failed to backup %s: %s', db_name, e)
                     errors.append(f'{db_name}: {e}')
+        if any((db_tmp / db).exists() for db in sqlite_dbs):
+            res = _mc_mirror(
+                str(db_tmp) + '/',
+                f'{prefix_path}/home/',
+                overwrite=True,
+                exclude=None,
+            )
+            if res['ok']:
+                uploaded += 1
+            else:
+                errors.append('sqlite dbs: mc mirror failed')
 
-        # Non-DB items: mirror each entry individually
+        # ── Phase 2: Classify non-DB items ──
+        dir_items = []
+        file_items = []
         for item in SYNC_INCLUDES_HOME:
             if item in sqlite_dbs:
                 continue
             full_path = HERMES_HOME / item
             if not full_path.exists():
                 continue
-            if full_path.is_file():
-                if is_sensitive(item):
-                    log.debug('Skipping sensitive file: %s', item)
+            if full_path.is_dir():
+                dir_items.append(item)
+            elif full_path.is_file():
+                if not is_sensitive(item):
+                    file_items.append(item)
+
+        # ── Phase 3: Snapshot directories ──
+        snap_dir = tmp / 'snapshot'
+        snap_dir.mkdir()
+
+        if can_snapshot:
+            # Use previous snapshot as link-dest reference for incremental copy
+            ref_dir = _SNAPSHOT_REF_DIR if _SNAPSHOT_REF_DIR.is_dir() else None
+
+            for item in dir_items:
+                src = HERMES_HOME / item
+                dest = snap_dir / item
+                item_ref = (ref_dir / item) if ref_dir else None
+                ok = _incremental_snapshot(src, dest, item_ref)
+                if not ok:
+                    # Fallback: direct mirror for this item
+                    log.warning('Snapshot failed for %s, using direct mirror', item)
+                    res = _mc_mirror(
+                        str(src) + '/',
+                        f'{prefix_path}/home/{item}/',
+                        overwrite=True,
+                        exclude=exclude_args,
+                    )
+                    if res['ok']:
+                        uploaded += 1
+                    else:
+                        errors.append(f'{item}: direct mirror failed')
+
+            # Snapshot individual files (trivial copy)
+            for item in file_items:
+                src = HERMES_HOME / item
+                dest = snap_dir / item
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    import shutil
+                    shutil.copy2(str(src), str(dest))
+                except (FileNotFoundError, OSError):
                     continue
-                # Copy to tmp staging dir preserving relative path, then mirror
-                staged = tmp / 'stage' / item
-                staged.parent.mkdir(parents=True, exist_ok=True)
-                import shutil
-                shutil.copy2(str(full_path), str(staged))
+
+            # Mirror the entire snapshot in one mc mirror call
+            if any(snap_dir.iterdir()):
                 res = _mc_mirror(
-                    str(staged.parent) + '/',
-                    f'{prefix_path}/home/{Path(item).parent}/' if Path(item).parent != Path('.') else f'{prefix_path}/home/',
+                    str(snap_dir) + '/',
+                    f'{prefix_path}/home/',
                     overwrite=True,
                     exclude=exclude_args,
                 )
                 if res['ok']:
                     uploaded += 1
                 else:
-                    errors.append(f'{item}: mc mirror failed')
-            elif full_path.is_dir():
+                    errors.append('snapshot mirror: mc mirror failed')
+
+            # Rotate: current snapshot becomes next sync's reference
+            try:
+                if _SNAPSHOT_REF_DIR.exists():
+                    import shutil
+                    shutil.rmtree(_SNAPSHOT_REF_DIR)
+                snap_dir.rename(_SNAPSHOT_REF_DIR)
+            except OSError as e:
+                log.debug('Failed to rotate snapshot ref: %s', e)
+        else:
+            # ── Degraded mode: direct mirror (old behavior) ──
+            for item in dir_items:
+                full_path = HERMES_HOME / item
                 res = _mc_mirror(
                     str(full_path) + '/',
                     f'{prefix_path}/home/{item}/',
@@ -574,9 +720,29 @@ def sync_state_to_minio() -> dict:
                 else:
                     errors.append(f'{item}: mc mirror failed')
 
+            for item in file_items:
+                staged = snap_dir / item
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    import shutil
+                    shutil.copy2(str(HERMES_HOME / item), str(staged))
+                except (FileNotFoundError, OSError):
+                    continue
+                parent_rel = str(Path(item).parent)
+                target = f'{prefix_path}/home/{parent_rel}/' if parent_rel != '.' else f'{prefix_path}/home/'
+                res = _mc_mirror(
+                    str(staged.parent) + '/',
+                    target,
+                    overwrite=True,
+                    exclude=exclude_args,
+                )
+                if res['ok']:
+                    uploaded += 1
+                else:
+                    errors.append(f'{item}: mc mirror failed')
+
     log.info('State sync to MinIO complete (mc mirror): %d items, %d errors.',
              uploaded, len(errors))
-    # 清理 mc mirror 可能留下的零字节目录标记对象
     try:
         _cleanup_remote_directory_markers(prefix_path)
     except Exception as e:
@@ -586,7 +752,10 @@ def sync_state_to_minio() -> dict:
 
 
 def _sync_state_to_minio_sdk() -> dict:
-    """SDK-based fallback for sync_state_to_minio (used in tests / no mc)."""
+    """SDK-based fallback for sync_state_to_minio (used in tests / no mc).
+
+    Uses rsync snapshot for directories when available, otherwise direct copy.
+    """
     client = get_client()
 
     if not client.bucket_exists(MINIO_BUCKET):
@@ -594,13 +763,20 @@ def _sync_state_to_minio_sdk() -> dict:
 
     uploaded = 0
     errors: list[str] = []
-
     sqlite_dbs = ["state.db", "kanban.db", "response_store.db"]
+    can_snapshot = (
+        _check_disk_space(HERMES_HOME, min_bytes=50 * 1024 * 1024)
+        and subprocess.run(['which', 'rsync'], capture_output=True).returncode == 0
+    )
+
     with tempfile.TemporaryDirectory(prefix="hermes_sync_") as tmpdir:
+        tmp = Path(tmpdir)
+
+        # SQLite: safe backup
         for db_name in sqlite_dbs:
             db_path = HERMES_HOME / db_name
             if db_path.exists():
-                backup_path = Path(tmpdir) / db_name
+                backup_path = tmp / db_name
                 try:
                     safe_sqlite_backup(db_path, backup_path)
                     client.fput_object(
@@ -611,6 +787,11 @@ def _sync_state_to_minio_sdk() -> dict:
                     log.warning("Failed to backup/upload %s: %s", db_name, e)
                     errors.append(f"{db_name}: {e}")
 
+        # Non-DB items
+        snap_dir = tmp / "snapshot"
+        snap_dir.mkdir()
+        ref_dir = _SNAPSHOT_REF_DIR if _SNAPSHOT_REF_DIR.is_dir() else None
+
         for item in SYNC_INCLUDES_HOME:
             if item in sqlite_dbs:
                 continue
@@ -620,32 +801,63 @@ def _sync_state_to_minio_sdk() -> dict:
             if full_path.is_file():
                 if is_sensitive(item):
                     continue
+                dest = snap_dir / item
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    client.fput_object(
-                        MINIO_BUCKET, object_key(f"home/{item}"), str(full_path)
-                    )
-                    uploaded += 1
-                except Exception as e:
-                    log.warning("Failed to upload %s: %s", item, e)
-                    errors.append(f"{item}: {e}")
+                    import shutil
+                    shutil.copy2(str(full_path), str(dest))
+                except (FileNotFoundError, OSError):
+                    continue
             elif full_path.is_dir():
-                for fpath in full_path.rglob("*"):
-                    if not fpath.is_file():
-                        continue
-                    rel = str(fpath.relative_to(HERMES_HOME))
-                    if is_sensitive(rel):
-                        continue
-                    try:
-                        client.fput_object(
-                            MINIO_BUCKET, object_key(f"home/{rel}"), str(fpath)
-                        )
-                        uploaded += 1
-                    except Exception as e:
-                        log.warning("Failed to upload %s: %s", rel, e)
-                        errors.append(f"{rel}: {e}")
+                if can_snapshot:
+                    dest = snap_dir / item
+                    item_ref = (ref_dir / item) if ref_dir else None
+                    _incremental_snapshot(full_path, dest, item_ref)
+                else:
+                    # Direct upload without snapshot
+                    for fpath in full_path.rglob("*"):
+                        if not fpath.is_file():
+                            continue
+                        rel = str(fpath.relative_to(HERMES_HOME))
+                        if is_sensitive(rel):
+                            continue
+                        try:
+                            client.fput_object(
+                                MINIO_BUCKET, object_key(f"home/{rel}"), str(fpath)
+                            )
+                            uploaded += 1
+                        except Exception as e:
+                            errors.append(f"{rel}: {e}")
+                    continue
+
+        # Upload all snapshot files
+        for fpath in snap_dir.rglob("*"):
+            if not fpath.is_file():
+                continue
+            rel = str(fpath.relative_to(snap_dir))
+            if is_sensitive(rel):
+                continue
+            try:
+                client.fput_object(
+                    MINIO_BUCKET, object_key(f"home/{rel}"), str(fpath)
+                )
+                uploaded += 1
+            except Exception as e:
+                log.warning("Failed to upload %s: %s", rel, e)
+                errors.append(f"{rel}: {e}")
+
+        # Rotate snapshot reference
+        if can_snapshot:
+            try:
+                if _SNAPSHOT_REF_DIR.exists():
+                    import shutil
+                    shutil.rmtree(_SNAPSHOT_REF_DIR)
+                snap_dir.rename(_SNAPSHOT_REF_DIR)
+            except OSError:
+                pass
 
     log.info("State sync to MinIO complete: %d objects uploaded.", uploaded)
-    result = {"ok": True, "mode": "state", "uploaded": uploaded, "errors": errors}
+    result = {"ok": len(errors) == 0, "mode": "state", "uploaded": uploaded, "errors": errors}
     return _persist_state_sync_result(result)
 
 
@@ -1099,6 +1311,10 @@ def sync_workspace_to_minio(mode: str = WORKSPACE_MODE_SAFE,
         raise ValueError(f"invalid workspace sync mode: {mode!r}")
     if cleanup_remote and mode != WORKSPACE_MODE_MIRROR:
         raise ValueError("cleanup_remote requires mode='mirror'")
+
+    quota_err = _check_bucket_quota_before_sync()
+    if quota_err:
+        return quota_err
 
     selected = validate_workspace_paths(paths) if paths else []
 

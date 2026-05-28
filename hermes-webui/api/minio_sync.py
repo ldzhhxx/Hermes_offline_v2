@@ -425,6 +425,14 @@ def _snapshot_status() -> dict[str, Any]:
     if persisted_state and persisted_ts > current_ts:
         last["state"] = persisted_state
     script = _find_minio_sync_script()
+    # Check if bucket capacity limit is exceeded
+    quota_exceeded = False
+    max_bytes = _coerce_int(os.environ.get("HERMES_MINIO_MAX_BYTES"), 10 * 1024 * 1024 * 1024)
+    if configured and not registration_required and max_bytes > 0:
+        used = _used_bytes(configured)
+        if used > max_bytes:
+            quota_exceeded = True
+            unavailable_reason = f"存储空间已超限（已用 {used // (1024*1024)}MB / 限制 {max_bytes // (1024*1024)}MB），无法同步"
     return {
         "config": cfg,
         "configured": configured,
@@ -437,6 +445,7 @@ def _snapshot_status() -> dict[str, Any]:
         "script_available": bool(script),
         "running": running,
         "last_result": last,
+        "quota_exceeded": quota_exceeded,
     }
 
 
