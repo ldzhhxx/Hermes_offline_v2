@@ -118,11 +118,6 @@ fi
 # are commonly root-owned on the host. Start as root, create/chown the mounted
 # directories, then run the actual services as the unprivileged hermes user.
 mkdir -p "${HERMES_HOME}" "${HERMES_WORKSPACE}" "${HERMES_WEBUI_STATE_DIR}"
-# Restore baked config.yaml if not present (volume mount may shadow the image copy)
-CONFIG_BAKED="/opt/hermes-offline/image-config/config.yaml.baked"
-if [[ ! -f "${HERMES_HOME}/config.yaml" && -f "${CONFIG_BAKED}" ]]; then
-  cp "${CONFIG_BAKED}" "${HERMES_HOME}/config.yaml"
-fi
 if [[ "$(id -u)" == "0" ]]; then
   log "Fixing ownership for mounted data directories..."
   chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
