@@ -79,6 +79,10 @@ COPY scripts/minio_sync.py ./scripts/minio_sync.py
 RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/start-dev.sh \
     && touch /.within_container
 
+# 安装 MinIO mc 客户端
+RUN curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
+    && chmod +x /usr/local/bin/mc
+
 RUN useradd --create-home --home-dir /home/hermes --shell /bin/bash hermes \
     && mkdir -p /home/hermes/.hermes /home/hermes/workspace \
     && chown -R hermes:hermes /home/hermes /opt/hermes-offline

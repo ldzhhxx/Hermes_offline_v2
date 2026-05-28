@@ -89,17 +89,20 @@ TARGET_GID = int(os.environ.get("HERMES_RUNTIME_GID", str(os.getgid())))
 # process) can read the latest auto-sync result without needing shared memory.
 STATE_SYNC_RESULT_FILE = HERMES_HOME / ".minio_state_sync_last.json"
 
-# Sensitive files to NEVER sync
-SENSITIVE_PATTERNS = {
-    ".env",
-    "auth.json",
-    "config.yaml",
-    "auth.lock",
-    "gateway.pid",
-    "gateway.lock",
-    "webui/settings.json",
-    "webui/.sessions.json",
+# 精确路径白名单 - 只过滤这些确切位置的文件，不误杀 skills/ 下的同名文件
+SENSITIVE_PATHS = {
+    '.env',
+    'auth.json',
+    'config.yaml',
+    'auth.lock',
+    'gateway.pid',
+    'gateway.lock',
+    'webui/settings.json',
+    'webui/.sessions.json',
 }
+
+# Keep old name as alias for backward compat with any external references
+SENSITIVE_PATTERNS = SENSITIVE_PATHS
 
 # Workspace sync modes
 WORKSPACE_MODE_SAFE = "safe"      # incremental: skip files that match remote
@@ -141,12 +144,10 @@ def is_blocked_extension(filename: str) -> bool:
 
 
 def is_sensitive(rel_path: str) -> bool:
-    """Check if a relative path matches sensitive patterns."""
-    for pat in SENSITIVE_PATTERNS:
-        if rel_path == pat or rel_path.endswith("/" + pat):
-            return True
-    # Skip WAL/SHM files - we handle SQLite via backup API
-    if rel_path.endswith(("-wal", "-shm", "-journal")):
+    """只过滤精确路径的敏感文件，不误杀 skills/ 下的同名文件。"""
+    if rel_path in SENSITIVE_PATHS:
+        return True
+    if rel_path.endswith(('-wal', '-shm', '-journal')):
         return True
     return False
 
@@ -214,6 +215,104 @@ def _download_object_atomically(client, bucket: str, object_name: str, dest: Pat
         except Exception:
             pass
         raise
+
+
+def _configure_mc_alias() -> str:
+    """配置 mc alias 用于后续 mc 命令，返回 alias 名称。"""
+    alias = 'hermes-minio'
+    scheme = 'https' if MINIO_SECURE else 'http'
+    endpoint = f'{scheme}://{MINIO_ENDPOINT}'
+    result = subprocess.run(
+        ['mc', 'alias', 'set', alias, endpoint, MINIO_ACCESS_KEY, MINIO_SECRET_KEY],
+        capture_output=True, text=True, check=True
+    )
+    log.debug('mc alias set: %s', result.stdout.strip() or result.stderr.strip())
+    return alias
+
+
+def _cleanup_remote_directory_markers(prefix_path: str) -> int:
+    """删除远端零字节目录标记对象（key 以 / 结尾）。
+
+    使用 mc ls --recursive 列出所有对象，找到 size=0 且 path 以 / 结尾的对象，
+    用 mc rm 删除它们。返回删除数量。
+    """
+    deleted = 0
+    try:
+        result = subprocess.run(
+            ['mc', 'ls', '--recursive', prefix_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            log.debug('mc ls for dir-marker cleanup failed: %s', result.stderr[:200])
+            return 0
+        for line in result.stdout.splitlines():
+            # mc ls output: "2024-01-01 00:00:00     0B  path/to/dir/"
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            size_str = parts[2]
+            path_part = parts[3]
+            if not path_part.endswith('/'):
+                continue
+            # size field: "0B" means zero bytes
+            if size_str not in ('0B', '0'):
+                continue
+            full_key = f'{prefix_path}/{path_part}'.replace('//', '/')
+            try:
+                rm_result = subprocess.run(
+                    ['mc', 'rm', '--force', full_key],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if rm_result.returncode == 0:
+                    deleted += 1
+                    log.debug('Removed directory marker: %s', full_key)
+                else:
+                    log.debug('mc rm failed for %s: %s', full_key, rm_result.stderr[:100])
+            except Exception as e:
+                log.debug('mc rm exception for %s: %s', full_key, e)
+    except Exception as e:
+        log.debug('_cleanup_remote_directory_markers failed: %s', e)
+    if deleted:
+        log.info('Cleaned up %d remote directory marker(s) under %s', deleted, prefix_path)
+    return deleted
+
+
+def _mc_mirror(source: str, target: str, overwrite: bool = True,
+               exclude: list[str] | None = None) -> dict:
+    """使用 mc mirror 同步目录，返回执行结果。"""
+    cmd = ['mc', 'mirror']
+    if overwrite:
+        cmd.append('--overwrite')
+    if exclude:
+        for pat in exclude:
+            cmd.extend(['--exclude', pat])
+    cmd.extend([source, target])
+    log.debug('mc mirror cmd: %s', ' '.join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    res = {
+        'ok': result.returncode == 0,
+        'stdout': result.stdout,
+        'stderr': result.stderr,
+        'returncode': result.returncode,
+    }
+    if res['ok']:
+        log.debug('mc mirror ok: %s', res['stdout'].strip()[:200])
+    else:
+        log.warning('mc mirror failed (rc=%d): %s', res['returncode'],
+                    (res['stderr'] or res['stdout']).strip()[:400])
+    return res
+
+
+def _cleanup_sqlite_wal(db_path: Path) -> None:
+    """恢复 SQLite 前清理 WAL/SHM/JOURNAL 文件。"""
+    for ext in ('-wal', '-shm', '-journal'):
+        wal = db_path.parent / (db_path.name + ext)
+        if wal.exists():
+            try:
+                wal.unlink()
+                log.info('Cleaned up %s', wal)
+            except OSError as e:
+                log.warning('Failed to clean up %s: %s', wal, e)
 
 
 def safe_sqlite_backup(db_path: Path, dest_path: Path):
@@ -295,6 +394,52 @@ def _should_skip_safe_upload(client, object_name: str, local_path: Path) -> bool
     return True
 
 
+def purge_minio_prefix(confirm: bool = False) -> dict:
+    """彻底清除 MINIO_PREFIX 下的所有对象（包括零字节目录标记）。
+
+    使用 minio SDK 的 remove_objects 批量删除接口，每批 1000 个。
+    必须传入 confirm=True 才会真正执行删除。
+    """
+    if not MINIO_BUCKET:
+        return {"ok": False, "error": "MINIO_BUCKET not configured"}
+
+    client = get_client()
+    prefix = object_key("") if MINIO_PREFIX else ""
+
+    # 列出所有对象
+    try:
+        objects = list(client.list_objects(MINIO_BUCKET, prefix=prefix, recursive=True))
+    except Exception as e:
+        return {"ok": False, "error": f"list_objects failed: {e}"}
+
+    total = len(objects)
+    log.info("purge: found %d objects under %s/%s", total, MINIO_BUCKET, prefix or "(root)")
+
+    if not confirm:
+        log.info("purge: dry-run mode (pass --confirm to actually delete)")
+        return {"ok": True, "dry_run": True, "would_delete": total}
+
+    from minio.deleteobjects import DeleteObject  # type: ignore
+
+    deleted = 0
+    errors: list[str] = []
+    batch_size = 1000
+
+    for i in range(0, total, batch_size):
+        batch = objects[i:i + batch_size]
+        delete_list = [DeleteObject(obj.object_name) for obj in batch]
+        try:
+            errs = list(client.remove_objects(MINIO_BUCKET, delete_list))
+            deleted += len(batch) - len(errs)
+            for err in errs:
+                errors.append(str(err))
+        except Exception as e:
+            errors.append(f"batch {i}-{i+len(batch)}: {e}")
+
+    log.info("purge complete: deleted=%d errors=%d", deleted, len(errors))
+    return {"ok": len(errors) == 0, "deleted": deleted, "errors": errors}
+
+
 # ── Upload: state (lightweight, daemon + manual) ───────────────────────────
 
 
@@ -337,10 +482,111 @@ def _persist_state_sync_result(result: dict) -> dict:
 
 
 def sync_state_to_minio() -> dict:
-    """Upload only Hermes state (allowlist) to MinIO. Never touches workspace.
+    """Upload only Hermes state (allowlist) to MinIO using mc mirror.
 
     Returns a result dict: {"uploaded": int, "errors": [str], "mode": "state"}.
     """
+    log.debug('sync_state_to_minio: SYNC_INCLUDES_HOME=%s', SYNC_INCLUDES_HOME)
+    log.debug('sync_state_to_minio: SENSITIVE_PATHS=%s', SENSITIVE_PATHS)
+
+    # Fall back to Python SDK path when mc is not available (tests / no mc binary)
+    mc_available = subprocess.run(['which', 'mc'], capture_output=True).returncode == 0
+
+    if not mc_available:
+        return _sync_state_to_minio_sdk()
+
+    try:
+        alias = _configure_mc_alias()
+    except Exception as e:
+        log.warning('mc alias set failed (%s); falling back to SDK path', e)
+        return _sync_state_to_minio_sdk()
+
+    bucket_path = f'{alias}/{MINIO_BUCKET}'
+    prefix_path = f'{bucket_path}/{MINIO_PREFIX}' if MINIO_PREFIX else bucket_path
+    exclude_args = list(SENSITIVE_PATHS)  # exact filenames for --exclude
+
+    uploaded = 0
+    errors: list[str] = []
+    sqlite_dbs = ['state.db', 'kanban.db', 'response_store.db']
+
+    with tempfile.TemporaryDirectory(prefix='hermes_sync_') as tmpdir:
+        tmp = Path(tmpdir)
+
+        # SQLite: safe backup first, then mc mirror the temp dir
+        db_tmp = tmp / 'dbs'
+        db_tmp.mkdir()
+        for db_name in sqlite_dbs:
+            db_path = HERMES_HOME / db_name
+            if db_path.exists():
+                backup_path = db_tmp / db_name
+                try:
+                    safe_sqlite_backup(db_path, backup_path)
+                    res = _mc_mirror(
+                        str(db_tmp) + '/',
+                        f'{prefix_path}/home/',
+                        overwrite=True,
+                        exclude=None,
+                    )
+                    if res['ok']:
+                        uploaded += 1
+                    else:
+                        errors.append(f'{db_name}: mc mirror failed')
+                    break  # mirror the whole db_tmp dir once
+                except Exception as e:
+                    log.warning('Failed to backup/mirror %s: %s', db_name, e)
+                    errors.append(f'{db_name}: {e}')
+
+        # Non-DB items: mirror each entry individually
+        for item in SYNC_INCLUDES_HOME:
+            if item in sqlite_dbs:
+                continue
+            full_path = HERMES_HOME / item
+            if not full_path.exists():
+                continue
+            if full_path.is_file():
+                if is_sensitive(item):
+                    log.debug('Skipping sensitive file: %s', item)
+                    continue
+                # Copy to tmp staging dir preserving relative path, then mirror
+                staged = tmp / 'stage' / item
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                import shutil
+                shutil.copy2(str(full_path), str(staged))
+                res = _mc_mirror(
+                    str(staged.parent) + '/',
+                    f'{prefix_path}/home/{Path(item).parent}/' if Path(item).parent != Path('.') else f'{prefix_path}/home/',
+                    overwrite=True,
+                    exclude=exclude_args,
+                )
+                if res['ok']:
+                    uploaded += 1
+                else:
+                    errors.append(f'{item}: mc mirror failed')
+            elif full_path.is_dir():
+                res = _mc_mirror(
+                    str(full_path) + '/',
+                    f'{prefix_path}/home/{item}/',
+                    overwrite=True,
+                    exclude=exclude_args,
+                )
+                if res['ok']:
+                    uploaded += 1
+                else:
+                    errors.append(f'{item}: mc mirror failed')
+
+    log.info('State sync to MinIO complete (mc mirror): %d items, %d errors.',
+             uploaded, len(errors))
+    # 清理 mc mirror 可能留下的零字节目录标记对象
+    try:
+        _cleanup_remote_directory_markers(prefix_path)
+    except Exception as e:
+        log.debug('Directory marker cleanup failed: %s', e)
+    result = {'ok': len(errors) == 0, 'mode': 'state', 'uploaded': uploaded, 'errors': errors}
+    return _persist_state_sync_result(result)
+
+
+def _sync_state_to_minio_sdk() -> dict:
+    """SDK-based fallback for sync_state_to_minio (used in tests / no mc)."""
     client = get_client()
 
     if not client.bucket_exists(MINIO_BUCKET):
@@ -990,7 +1236,93 @@ def sync_to_minio() -> dict:
 
 
 def restore_from_minio():
-    """Download state from MinIO to local paths."""
+    """Download state from MinIO to local paths using mc mirror when available."""
+    # Fall back to SDK path when mc is not available (tests / no mc binary)
+    mc_available = subprocess.run(['which', 'mc'], capture_output=True).returncode == 0
+
+    if not mc_available:
+        return _restore_from_minio_sdk()
+
+    try:
+        alias = _configure_mc_alias()
+    except Exception as e:
+        log.warning('mc alias set failed (%s); falling back to SDK restore', e)
+        return _restore_from_minio_sdk()
+
+    bucket_path = f'{alias}/{MINIO_BUCKET}'
+    prefix_path = f'{bucket_path}/{MINIO_PREFIX}' if MINIO_PREFIX else bucket_path
+
+    # Log remote object list for debug
+    try:
+        ls_result = subprocess.run(
+            ['mc', 'ls', '--recursive', f'{prefix_path}/'],
+            capture_output=True, text=True
+        )
+        log.debug('Remote objects under %s:\n%s', prefix_path,
+                  ls_result.stdout[:2000] or '(empty)')
+    except Exception as e:
+        log.debug('mc ls failed: %s', e)
+
+    # Clean up SQLite WAL files before restore
+    for db_name in ('state.db', 'kanban.db', 'response_store.db'):
+        _cleanup_sqlite_wal(HERMES_HOME / db_name)
+
+    exclude_args = list(SENSITIVE_PATHS)
+
+    restored_any = False
+
+    # Restore home/
+    home_src = f'{prefix_path}/home/'
+    log.info('Restoring home/ from %s -> %s', home_src, HERMES_HOME)
+    HERMES_HOME.mkdir(parents=True, exist_ok=True)
+    res = _mc_mirror(home_src, str(HERMES_HOME) + '/', overwrite=True, exclude=exclude_args)
+    if res['ok']:
+        restored_any = True
+        log.info('home/ restore ok')
+    else:
+        log.warning('home/ restore failed: %s', res['stderr'][:400])
+
+    # Restore workspace/
+    ws_src = f'{prefix_path}/workspace/'
+    log.info('Restoring workspace/ from %s -> %s', ws_src, HERMES_WORKSPACE)
+    HERMES_WORKSPACE.mkdir(parents=True, exist_ok=True)
+    res = _mc_mirror(ws_src, str(HERMES_WORKSPACE) + '/', overwrite=True)
+    if res['ok']:
+        restored_any = True
+        log.info('workspace/ restore ok')
+    else:
+        log.warning('workspace/ restore failed: %s', res['stderr'][:400])
+
+    # Fix ownership
+    try:
+        subprocess.run(
+            ['chown', '-R', f'{TARGET_UID}:{TARGET_GID}',
+             str(HERMES_HOME), str(HERMES_WORKSPACE)],
+            capture_output=True
+        )
+    except Exception as e:
+        log.debug('chown after restore failed: %s', e)
+
+    # Print top-2-level directory tree for debug
+    for base in (HERMES_HOME, HERMES_WORKSPACE):
+        if base.exists():
+            try:
+                entries = []
+                for p in sorted(base.iterdir()):
+                    entries.append(f'  {p.name}/')
+                    if p.is_dir():
+                        for pp in sorted(p.iterdir())[:10]:
+                            entries.append(f'    {pp.name}')
+                log.debug('Post-restore tree %s:\n%s', base, '\n'.join(entries[:50]))
+            except Exception:
+                pass
+
+    log.info('Restore from MinIO complete (mc mirror).')
+    return restored_any
+
+
+def _restore_from_minio_sdk():
+    """SDK-based fallback for restore_from_minio (used in tests / no mc)."""
     client = get_client()
 
     if not client.bucket_exists(MINIO_BUCKET):
@@ -1003,21 +1335,26 @@ def restore_from_minio():
         log.info("No backup content found at %s/%s; skipping restore.", MINIO_BUCKET, prefix)
         return False
 
+    log.debug('restore: found %d remote objects under %s/%s', len(objects), MINIO_BUCKET, prefix)
+
+    # Clean up SQLite WAL files before restore
+    for db_name in ('state.db', 'kanban.db', 'response_store.db'):
+        _cleanup_sqlite_wal(HERMES_HOME / db_name)
+
     restored = 0
     for obj in objects:
-        # Strip the prefix to get relative path
         rel = obj.object_name
         if MINIO_PREFIX:
-            rel = rel[len(MINIO_PREFIX) + 1 :]
+            rel = rel[len(MINIO_PREFIX) + 1:]
 
         if rel.startswith("home/"):
-            local_rel = rel[5:]  # strip "home/"
+            local_rel = rel[5:]
             if is_sensitive(local_rel) or not is_allowed_home_path(local_rel):
                 continue
             dest = HERMES_HOME / local_rel
             stop_at = HERMES_HOME
         elif rel.startswith("workspace/"):
-            local_rel = rel[10:]  # strip "workspace/"
+            local_rel = rel[10:]
             dest = HERMES_WORKSPACE / local_rel
             stop_at = HERMES_WORKSPACE
         else:
@@ -1029,6 +1366,7 @@ def restore_from_minio():
             _download_object_atomically(client, MINIO_BUCKET, obj.object_name, dest)
             _chown_path(dest)
             restored += 1
+            log.debug('Restored %s -> %s', obj.object_name, dest)
         except Exception as e:
             log.warning("Failed to restore %s: %s", obj.object_name, e)
 
@@ -1122,6 +1460,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help="optional workspace-relative entries to sync (files or dirs); "
              "when omitted, the entire workspace is synced",
     )
+
+    purge = sub.add_parser("purge", help="delete ALL objects under MINIO_PREFIX (destructive)")
+    purge.add_argument(
+        "--confirm",
+        action="store_true",
+        help="actually perform deletion (without this flag, dry-run only)",
+    )
+
     return parser
 
 
@@ -1157,6 +1503,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "daemon":
         run_daemon()
         return 0
+    if args.cmd == "purge":
+        result = purge_minio_prefix(confirm=bool(args.confirm))
+        _emit_result(result)
+        return 0 if result.get("ok") else 1
 
     parser.print_usage()
     return 1

@@ -81,3 +81,9 @@ RUN set -eux; \
 
 RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/start-dev.sh \
     && chown -R hermes:hermes /opt/hermes-offline /home/hermes/.hermes
+
+# 安装 MinIO mc 客户端（如已存在则跳过）
+RUN if [ ! -f /usr/local/bin/mc ]; then \
+      curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
+      && chmod +x /usr/local/bin/mc; \
+    fi
