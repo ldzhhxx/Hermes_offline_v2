@@ -80,10 +80,11 @@ RUN chmod +x /opt/hermes-offline/scripts/start.sh /opt/hermes-offline/scripts/st
     && touch /.within_container
 
 # 安装 MinIO mc 客户端 + rsync (用于一致性快照同步)
-RUN apt-get update && apt-get install -y --no-install-recommends rsync \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
-    && chmod +x /usr/local/bin/mc
+COPY mc /usr/local/bin/mc
+RUN chmod +x /usr/local/bin/mc \
+    && echo "deb http://10.17.21.147:9081/repository/apt-debian-tsinghua/ trixie main contrib non-free non-free-firmware" > /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends rsync \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --home-dir /home/hermes --shell /bin/bash hermes \
     && mkdir -p /home/hermes/.hermes /home/hermes/workspace \
