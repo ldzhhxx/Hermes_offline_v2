@@ -154,6 +154,9 @@ start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python -m gate
 AGENT_PID=$!
 log "Hermes Agent PID: ${AGENT_PID}"
 
+# Clear stale model cache so fresh config.yaml is always used on startup
+rm -f "${HERMES_WEBUI_STATE_DIR}/models_cache.json"
+
 log "Starting Hermes WebUI on ${HERMES_WEBUI_HOST}:${HERMES_WEBUI_PORT}..."
 start_as_hermes /opt/hermes-offline/hermes-webui /opt/hermes-offline/.venv/bin/python server.py &
 WEBUI_PID=$!
