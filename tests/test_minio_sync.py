@@ -1,5 +1,6 @@
 """Tests for scripts/minio_sync.py -- unit tests for logic not requiring live MinIO."""
 import json
+import os
 import sqlite3
 import sys
 import tempfile
@@ -36,7 +37,7 @@ def test_is_allowed_home_path():
     assert minio_sync.is_allowed_home_path("state.db")
     assert minio_sync.is_allowed_home_path("skills/my-skill/SKILL.md")
     assert minio_sync.is_allowed_home_path("webui/sessions/demo.json")
-    assert not minio_sync.is_allowed_home_path("logs/agent.log")
+    assert minio_sync.is_allowed_home_path("logs/agent.log")
     assert not minio_sync.is_allowed_home_path("webui/settings.json")
     assert not minio_sync.is_allowed_home_path("random/extra.txt")
 
@@ -111,6 +112,7 @@ def test_restore_from_minio_skips_disallowed_home_paths(tmp_path, monkeypatch):
             return [
                 SimpleNamespace(object_name="home/state.db"),
                 SimpleNamespace(object_name="home/logs/agent.log"),
+                SimpleNamespace(object_name="home/random/extra.txt"),
                 SimpleNamespace(object_name="workspace/notes/todo.txt"),
             ]
 
@@ -126,9 +128,10 @@ def test_restore_from_minio_skips_disallowed_home_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
 
     assert minio_sync.restore_from_minio() is True
-    assert fake_client.downloaded == ["home/state.db", "workspace/notes/todo.txt"]
+    assert fake_client.downloaded == ["home/state.db", "home/logs/agent.log", "workspace/notes/todo.txt"]
     assert (home / "state.db").read_text(encoding="utf-8") == "home/state.db"
-    assert not (home / "logs" / "agent.log").exists()
+    assert (home / "logs" / "agent.log").read_text(encoding="utf-8") == "home/logs/agent.log"
+    assert not (home / "random" / "extra.txt").exists()
     assert (workspace / "notes" / "todo.txt").read_text(encoding="utf-8") == "workspace/notes/todo.txt"
 
 
@@ -897,3 +900,56 @@ def test_daemon_performs_immediate_sync_before_first_sleep(monkeypatch):
     assert first_sync < first_sleep, (
         f"Expected sync before sleep, got order: {call_order}"
     )
+
+
+# ── Cross-process sync lock ────────────────────────────────────────────────
+
+
+def test_sync_state_skips_when_lock_held(tmp_path, monkeypatch):
+    """sync_state_to_minio returns gracefully when another sync holds the lock."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "SOUL.md").write_text("soul", encoding="utf-8")
+    monkeypatch.setattr(minio_sync, "HERMES_HOME", home)
+    monkeypatch.setattr(minio_sync, "HERMES_WORKSPACE", tmp_path / "workspace")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "")
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    lock_file = tmp_path / ".minio_state_sync.lock"
+    monkeypatch.setattr(minio_sync, "_STATE_SYNC_LOCK_FILE", lock_file)
+
+    import fcntl
+    # Hold the lock externally
+    fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        result = minio_sync.sync_state_to_minio()
+        assert result["ok"] is True
+        assert result.get("skipped_reason") == "concurrent"
+        assert fake.uploaded == []
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_sync_state_succeeds_when_lock_available(tmp_path, monkeypatch):
+    """sync_state_to_minio acquires lock and syncs normally."""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "SOUL.md").write_text("soul", encoding="utf-8")
+    monkeypatch.setattr(minio_sync, "HERMES_HOME", home)
+    monkeypatch.setattr(minio_sync, "HERMES_WORKSPACE", tmp_path / "workspace")
+    monkeypatch.setattr(minio_sync, "MINIO_PREFIX", "")
+    monkeypatch.setattr(minio_sync, "MINIO_BUCKET", "test-bucket")
+    monkeypatch.setattr(minio_sync, "STATE_SYNC_RESULT_FILE", tmp_path / ".result.json")
+    lock_file = tmp_path / ".minio_state_sync.lock"
+    monkeypatch.setattr(minio_sync, "_STATE_SYNC_LOCK_FILE", lock_file)
+    fake = _RecordingClient()
+    monkeypatch.setattr(minio_sync, "get_client", lambda: fake)
+
+    result = minio_sync.sync_state_to_minio()
+    assert result["ok"] is True
+    assert "skipped_reason" not in result
+    assert any("SOUL.md" in k for k, _ in fake.uploaded)

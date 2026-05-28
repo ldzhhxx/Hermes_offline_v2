@@ -29,6 +29,7 @@ CLI:
 """
 
 import argparse
+import fcntl
 import hashlib
 import json
 import logging
@@ -77,6 +78,7 @@ SYNC_INCLUDES_HOME = [
     "sessions",
     "memories",
     "cron",
+    "logs",
     "sandboxes",
     "webui/models_cache.json",
     "webui/sessions",
@@ -88,6 +90,42 @@ TARGET_GID = int(os.environ.get("HERMES_RUNTIME_GID", str(os.getgid())))
 # Durable file written after every state sync so the WebUI bridge (a separate
 # process) can read the latest auto-sync result without needing shared memory.
 STATE_SYNC_RESULT_FILE = HERMES_HOME / ".minio_state_sync_last.json"
+
+# Cross-process lock file to prevent concurrent state syncs between the daemon
+# and WebUI-triggered subprocess invocations.
+_STATE_SYNC_LOCK_FILE = HERMES_HOME / ".minio_state_sync.lock"
+
+
+class _SyncLock:
+    """Non-blocking file lock for cross-process mutual exclusion.
+
+    Uses fcntl.flock(LOCK_EX | LOCK_NB) so a second process attempting to
+    sync concurrently will fail immediately rather than queue up stale syncs.
+    """
+
+    def __init__(self, lock_path: Path):
+        self._path = lock_path
+        self._fd: int | None = None
+
+    def __enter__(self):
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = os.open(str(self._path), os.O_CREAT | os.O_RDWR)
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError):
+            os.close(self._fd)
+            self._fd = None
+            raise
+        return self
+
+    def __exit__(self, *exc):
+        if self._fd is not None:
+            try:
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(self._fd)
+            self._fd = None
 
 # 精确路径白名单 - 只过滤这些确切位置的文件，不误杀 skills/ 下的同名文件
 SENSITIVE_PATHS = {
@@ -571,6 +609,16 @@ def sync_state_to_minio() -> dict:
 
     Returns a result dict: {"uploaded": int, "errors": [str], "mode": "state"}.
     """
+    try:
+        with _SyncLock(_STATE_SYNC_LOCK_FILE):
+            return _sync_state_to_minio_impl()
+    except (OSError, IOError):
+        log.info("State sync skipped: another sync is already in progress")
+        return {"ok": True, "mode": "state", "uploaded": 0, "errors": [], "skipped_reason": "concurrent"}
+
+
+def _sync_state_to_minio_impl() -> dict:
+    """Internal implementation of state sync (called under lock)."""
     log.debug('sync_state_to_minio: SYNC_INCLUDES_HOME=%s', SYNC_INCLUDES_HOME)
     log.debug('sync_state_to_minio: SENSITIVE_PATHS=%s', SENSITIVE_PATHS)
 
