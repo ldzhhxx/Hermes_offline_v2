@@ -69,6 +69,7 @@ COPY scripts ./scripts
 COPY image-config/config.yaml /home/hermes/.hermes/config.yaml
 COPY image-config/.env /home/hermes/.hermes/.env
 COPY image-config/.env /opt/hermes-offline/image-config/.env.baked
+COPY image-config/config.yaml /opt/hermes-offline/image-config/config.yaml.baked
 
 # Reinstall deps only if REINSTALL_DEPS is set (e.g. after pyproject.toml change)
 RUN set -eux; \
