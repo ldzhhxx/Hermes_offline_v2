@@ -1664,13 +1664,7 @@ def run_daemon():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    log.info("Periodic state sync daemon started (interval=%ds; workspace excluded).", SYNC_INTERVAL)
-    # Perform an immediate sync so the WebUI shows a result right after startup
-    # instead of waiting a full interval.
-    try:
-        sync_state_to_minio()
-    except Exception as e:
-        log.error("Initial state sync failed: %s", e)
+    log.info("Periodic state sync daemon started (interval=%ds; workspace excluded). First sync in %ds.", SYNC_INTERVAL, SYNC_INTERVAL)
     while not _shutdown:
         time.sleep(SYNC_INTERVAL)
         if _shutdown:

@@ -307,49 +307,80 @@
   .system-health-bar{height:5px;overflow:hidden;border-radius:999px;background:color-mix(in srgb,var(--border) 70%,transparent);border:1px solid color-mix(in srgb,var(--border) 75%,transparent);}
   .system-health-bar-fill{height:100%;width:0%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent-hover));transition:width .25s ease;}
   .system-health-foot{font-size:11px;color:var(--muted);line-height:1.45;opacity:.82;}
-  /* MinIO sync panel — reuses .insights-card surface, adds local layout. */
-  .minio-sync-panel.insights-card{display:flex;flex-direction:column;gap:14px;}  .minio-sync-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
-  .minio-sync-sub{font-size:11px;color:var(--muted);margin-top:-4px;line-height:1.45;}
-  .minio-sync-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);color:var(--muted);background:var(--surface);max-width:60vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .minio-sync-dot{width:7px;height:7px;border-radius:999px;background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);opacity:.88;}
-  .minio-sync-row{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
-  .minio-sync-row-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px;}
-  .minio-sync-row-title{font-size:12px;font-weight:650;color:var(--text);}
-  .minio-sync-row-sub{font-size:11px;color:var(--muted);line-height:1.5;}
-  .minio-sync-row-sub code{font-family:'SF Mono',ui-monospace,monospace;font-size:11px;background:var(--hover-bg);padding:1px 4px;border-radius:3px;}
-  .minio-sync-row-actions{flex-shrink:0;display:flex;align-items:flex-start;}
+  /* MinIO sync panel — redesigned UX */
+  .minio-sync-panel.insights-card{display:flex;flex-direction:column;gap:14px;}
+  .minio-sync-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+  .minio-sync-sub{font-size:11px;color:var(--muted);margin-top:2px;line-height:1.45;}
+  .minio-sync-status{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);color:var(--muted);background:var(--surface);white-space:nowrap;}
+  .minio-sync-status--ok{border-color:var(--accent-bg-strong);color:var(--accent-text);background:var(--accent-bg);}
+  .minio-sync-status--syncing{border-color:var(--accent);color:var(--accent);}
+  .minio-sync-status--error{border-color:rgba(208,77,77,.35);color:#c03030;background:rgba(208,77,77,.08);}
+  .minio-sync-dot{width:7px;height:7px;border-radius:999px;background:var(--accent);opacity:.88;}
+  .minio-sync-dot--ok{background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg);}
+  .minio-sync-dot--syncing{background:var(--accent);animation:minio-pulse 1.2s ease-in-out infinite;}
+  .minio-sync-dot--error{background:#c03030;box-shadow:0 0 0 3px rgba(208,77,77,.15);}
+  @keyframes minio-pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.5;transform:scale(.7);}}
+  /* Usage inline bar */
+  .minio-usage-inline{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);display:flex;flex-direction:column;gap:6px;}
+  .minio-usage-inline--loading{flex-direction:row;align-items:center;justify-content:space-between;}
+  .minio-usage-top{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .minio-usage-label{font-size:11px;font-weight:600;color:var(--muted);}
+  .minio-usage-value{font-size:12px;font-variant-numeric:tabular-nums;color:var(--text);}
+  .minio-usage-load-btn{padding:4px 10px;border-radius:6px;background:var(--accent-bg);border:1px solid var(--accent-bg-strong);color:var(--accent-text);font-size:11px;font-weight:600;cursor:pointer;}
+  .minio-usage-load-btn:hover{background:var(--accent-bg-strong);}
+  /* State sync row — compact */
+  .minio-state-row{display:flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-size:12px;}
+  .minio-state-label{font-weight:600;color:var(--muted);font-size:11px;}
+  .minio-state-status{color:var(--text);font-size:11px;}
+  .minio-state-status--busy{color:var(--accent);}
+  .minio-state-sync-link{background:none;border:none;color:var(--accent);font-size:11px;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px;}
+  .minio-state-sync-link:hover{color:var(--accent-hover,var(--accent));}
+  /* Workspace section */
+  .minio-workspace-section{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
+  .minio-workspace-header{display:flex;align-items:center;gap:8px;}
+  .minio-workspace-title{font-size:13px;font-weight:650;color:var(--text);}
+  .minio-workspace-help{cursor:help;font-size:13px;opacity:.7;}
+  .minio-workspace-help:hover{opacity:1;}
+  .minio-workspace-desc{font-size:11px;color:var(--muted);line-height:1.5;margin-top:-4px;}
+  .minio-workspace-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;}
+  /* Buttons */
   .minio-sync-btn{padding:6px 12px;border-radius:6px;background:var(--accent-bg);border:1px solid var(--accent-bg-strong);color:var(--accent-text);font-size:12px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s,opacity .15s;}
   .minio-sync-btn:hover:not(:disabled){background:var(--accent-bg-strong);border-color:var(--accent);}
   .minio-sync-btn:disabled{opacity:.55;cursor:not-allowed;}
+  .minio-sync-btn--primary{background:var(--accent);border-color:var(--accent);color:#fff;padding:8px 18px;font-size:13px;}
+  .minio-sync-btn--primary:hover:not(:disabled){background:var(--accent-hover,var(--accent));border-color:var(--accent-hover,var(--accent));}
+  .minio-sync-btn--secondary{background:var(--surface);border-color:var(--border);color:var(--text);font-weight:500;}
+  .minio-sync-btn--secondary:hover:not(:disabled){background:var(--hover-bg);border-color:var(--accent-bg-strong);}
+  .minio-sync-btn--sm{padding:4px 10px;font-size:11px;}
   .minio-sync-btn--danger{background:rgba(208,77,77,.12);border-color:rgba(208,77,77,.35);color:#c03030;}
   .minio-sync-btn--danger:hover:not(:disabled){background:rgba(208,77,77,.22);border-color:#c03030;}
-  .minio-sync-options{display:flex;flex-direction:column;gap:6px;}
-  .minio-sync-option{display:inline-flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);}
-  .minio-sync-option select{background:var(--input-bg,var(--bg));color:var(--text);border:1px solid var(--border);border-radius:6px;padding:3px 6px;font-size:12px;}
-  .minio-sync-option--danger{color:#e8a030;}
-  .minio-sync-option--danger input[type=checkbox]{accent-color:#e8a030;}
-  .minio-sync-warn{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:6px;background:rgba(232,160,48,.12);border:1px solid rgba(232,160,48,.28);color:#c87a18;}
+  /* Results */
   .minio-sync-result{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;padding:6px 8px;border-radius:6px;background:var(--hover-bg);color:var(--muted);}
+  .minio-sync-result--idle{display:none;}
   .minio-sync-result--ok{background:var(--accent-bg);color:var(--accent-text);border:1px solid var(--accent-bg-strong);}
   .minio-sync-result--err{background:color-mix(in srgb,var(--error,#e05) 10%,transparent);color:var(--error,#e05);border:1px solid color-mix(in srgb,var(--error,#e05) 30%,transparent);}
   .minio-sync-result-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
   .minio-sync-result-ts{font-size:10px;color:inherit;opacity:.75;flex-shrink:0;}
-  /* Quota panel: total/used/remaining + visual bar. */
-  .minio-sync-quota{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
-  .minio-sync-quota--unset{opacity:.85;}
-  .minio-sync-quota-row{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text);}
-  .minio-sync-quota-label{color:var(--muted);font-weight:600;}
-  .minio-sync-quota-value{font-variant-numeric:tabular-nums;}
+  .minio-sync-retry-btn{background:none;border:none;color:inherit;font-size:11px;font-weight:600;cursor:pointer;text-decoration:underline;padding:0 4px;flex-shrink:0;}
+  /* Quota bar (reused) */
   .minio-sync-quota-bar{height:5px;border-radius:999px;background:color-mix(in srgb,var(--border) 70%,transparent);overflow:hidden;}
   .minio-sync-quota-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-hover));transition:width .25s ease;border-radius:inherit;}
   .minio-sync-quota-fill.is-warn{background:linear-gradient(90deg,#e8a030,#cc7a00);}
   .minio-sync-quota-fill.is-critical{background:linear-gradient(90deg,#d04d4d,#a02020);}
   .minio-sync-quota-warn{margin-top:4px;}
-  .minio-sync-guidance{font-size:11px;line-height:1.6;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:6px 10px;}
-  .minio-sync-guidance summary{cursor:pointer;font-weight:600;color:var(--text-secondary, var(--muted));user-select:none;}
-  .minio-sync-guidance ul{margin:6px 0 2px 0;padding-left:18px;}
-  .minio-sync-guidance li{margin-bottom:2px;}
-  .minio-sync-guidance code{font-size:10px;background:var(--surface);padding:1px 4px;border-radius:3px;}
+  .minio-sync-warn{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:6px;background:rgba(232,160,48,.12);border:1px solid rgba(232,160,48,.28);color:#c87a18;}
+  /* Footer links & advanced */
+  .minio-footer-links{display:flex;flex-direction:column;gap:8px;padding-top:4px;border-top:1px solid var(--border);}
+  .minio-footer-link{background:none;border:none;color:var(--accent);font-size:11px;font-weight:600;cursor:pointer;padding:0;text-align:left;text-decoration:underline;text-underline-offset:2px;}
+  .minio-footer-link:hover{color:var(--accent-hover,var(--accent));}
+  .minio-advanced-section{font-size:11px;color:var(--muted);}
+  .minio-advanced-toggle{cursor:pointer;font-weight:600;color:var(--muted);user-select:none;}
+  .minio-advanced-toggle:hover{color:var(--text);}
+  .minio-advanced-body{display:flex;flex-direction:column;gap:10px;margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);}
+  .minio-purge-zone{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px solid var(--border);}
+  .minio-purge-warn{font-size:11px;color:#c87a18;line-height:1.4;}
+  /* Empty state */
+  .minio-sync-empty{font-size:12px;color:var(--muted);padding:16px 12px;border:1px dashed var(--border);border-radius:8px;text-align:center;line-height:1.5;}
   /* Selectable workspace tree. */
   .minio-ws-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
   .minio-ws-toolbar-btn{padding:3px 9px;border-radius:6px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s;}
@@ -363,39 +394,44 @@
   .minio-ws-entry-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'SF Mono',ui-monospace,monospace;}
   .minio-ws-entry-meta{flex-shrink:0;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums;}
   .minio-sync-empty{font-size:11px;color:var(--muted);padding:8px 12px;border:1px dashed var(--border);border-radius:6px;text-align:center;}
-  /* Unavailable / register CTA card. */
-  .minio-sync-panel--unavailable{gap:10px;}
-  .minio-sync-panel--unavailable .minio-sync-status--off{color:var(--muted);background:var(--surface);}
-  .minio-sync-panel--unavailable .minio-sync-dot{background:var(--muted);box-shadow:none;opacity:.55;}
-  .minio-sync-unavailable{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
-  .minio-sync-unavailable-text{font-size:12px;color:var(--text);line-height:1.5;}
-  .minio-sync-register-link{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;background:var(--accent-bg);border:1px solid var(--accent-bg-strong);color:var(--accent-text);font-size:12px;font-weight:600;text-decoration:none;}
-  .minio-sync-register-link:hover{background:var(--accent-bg-strong);border-color:var(--accent);}
+  /* Unavailable / welcome card. */
+  .minio-sync-panel--unavailable{gap:16px;align-items:center;text-align:center;padding:24px 16px !important;}
+  .minio-unavail-welcome{display:flex;flex-direction:column;align-items:center;gap:6px;}
+  .minio-unavail-icon{font-size:28px;line-height:1;}
+  .minio-unavail-title{font-size:15px;font-weight:700;color:var(--text);}
+  .minio-unavail-desc{font-size:12px;color:var(--muted);line-height:1.5;max-width:280px;}
+  .minio-unavail-login-btn{padding:10px 24px;border-radius:8px;background:var(--accent);border:none;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:background .15s;}
+  .minio-unavail-login-btn:hover{background:var(--accent-hover,var(--accent));}
+  .minio-unavail-register{font-size:11px;color:var(--muted);text-decoration:underline;text-underline-offset:2px;}
+  .minio-unavail-register:hover{color:var(--text);}
+  .minio-login-modal-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;}
+  .minio-login-modal{background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;width:360px;max-width:90vw;display:flex;flex-direction:column;gap:10px;box-shadow:0 8px 32px rgba(0,0,0,.25);}
+  .minio-login-modal-title{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px;}
+  .minio-login-label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--text-secondary);}
+  .minio-login-input{padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:13px;outline:none;}
+  .minio-login-input:focus{border-color:var(--accent);}
+  .minio-login-checkbox{flex-direction:row;align-items:center;gap:6px;}
+  .minio-login-hint{font-size:11px;color:var(--text-secondary);line-height:1.4;}
+  .minio-login-derived{font-size:11px;color:var(--text-secondary);background:var(--surface);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;}
+  .minio-login-derived-row strong{color:var(--text);}
+  .minio-login-error{font-size:12px;color:var(--danger,#e53e3e);padding:4px 0;}
+  .minio-login-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px;}
+  .minio-login-cancel{padding:6px 14px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);font-size:12px;cursor:pointer;}
+  .minio-login-submit{padding:6px 14px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-size:12px;font-weight:600;cursor:pointer;}
+  .minio-login-submit:disabled{opacity:.5;cursor:not-allowed;}
   @media (max-width:600px){
-    .minio-sync-row{flex-direction:column;align-items:stretch;}
-    .minio-sync-row-actions{justify-content:flex-end;}
+    .minio-workspace-actions{flex-direction:column;}
+    .minio-state-row{flex-wrap:wrap;}
   }
-  /* Workspace right-side mount: the canonical home for MinIO sync UI in
-     this build. Sized for the narrow .rightpanel column rather than the
-     wider Insights tab, and visually anchored under the panel header so
-     it reads as part of workspace management. */
+  /* Workspace right-side mount */
   .workspace-cloud-sync{display:block;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--surface) 55%,transparent);padding:10px 12px;flex-shrink:0;max-height:60%;overflow-y:auto;}
   .workspace-cloud-sync[hidden]{display:none;}
   .workspace-cloud-sync .minio-sync-panel.insights-card{padding:10px 0;background:transparent;border:0;box-shadow:none;border-radius:0;gap:10px;}
   .workspace-cloud-sync .insights-card-title{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);}
   .workspace-cloud-sync .minio-sync-status{font-size:10px;padding:2px 6px;}
-  .workspace-cloud-sync .minio-sync-row{flex-direction:column;align-items:stretch;gap:8px;padding:8px 10px;}
-  .workspace-cloud-sync .minio-sync-row-actions{justify-content:flex-end;}
+  .workspace-cloud-sync .minio-workspace-section{padding:8px 10px;}
+  .workspace-cloud-sync .minio-workspace-actions{flex-direction:column;}
   .workspace-cloud-sync .minio-ws-list{max-height:140px;}
-  .workspace-cloud-sync .minio-sync-quota-source{font-size:10px;color:var(--muted);font-style:italic;line-height:1.3;}
-  /* Collapsible panel body */
-  .minio-sync-collapse{display:flex;flex-direction:column;gap:12px;}
-  .minio-sync-collapse-toggle{cursor:pointer;font-size:11px;font-weight:600;color:var(--accent);user-select:none;padding:2px 0;}
-  .minio-sync-collapse-toggle:hover{text-decoration:underline;}
-  /* Multi-button row */
-  .minio-sync-row-actions--multi{display:flex;gap:6px;flex-shrink:0;align-items:flex-start;}
-  .minio-sync-btn--full{background:color-mix(in srgb,var(--accent) 18%,var(--surface));border-color:var(--accent);color:var(--accent);}
-  .minio-sync-btn--full:hover:not(:disabled){background:color-mix(in srgb,var(--accent) 30%,var(--surface));}
   /* Remote files viewer */
   .minio-remote-files{margin-top:4px;border:1px solid var(--border);border-radius:6px;padding:8px;max-height:220px;overflow-y:auto;font-size:11px;}
   .minio-remote-file-header{display:flex;align-items:center;justify-content:space-between;font-weight:600;margin-bottom:6px;}

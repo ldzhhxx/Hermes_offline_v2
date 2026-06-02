@@ -2289,8 +2289,18 @@ function _formatMinioTimestamp(epoch) {
   return _formatMinioRelativeTimestamp(epoch);
 }
 function _minioSyncSummary(result) {
-  if (!result) return '尚未执行同步';
-  if (result.error && !result.ok) return `错误: ${result.error}`;
+  if (!result) return '';
+  if (result.error && !result.ok) {
+    // Friendly error messages
+    const e = String(result.error).toLowerCase();
+    if (e.includes('credential') || e.includes('access denied') || e.includes('invalid access'))
+      return '登录已过期，请重新登录';
+    if (e.includes('mirror') || e.includes('timeout') || e.includes('network') || e.includes('connect'))
+      return '同步失败，请检查网络连接后重试';
+    if (e.includes('quota') || e.includes('space'))
+      return '存储空间不足';
+    return '同步失败，请稍后重试';
+  }
   const d = result.details || {};
   const bits = [];
   if (typeof d.uploaded === 'number') bits.push(`${d.uploaded} 个文件已上传`);
@@ -2307,15 +2317,17 @@ function _minioSyncSummary(result) {
 }
 function _renderMinioSyncResult(lane, result) {
   if (!result) {
-    return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}">尚未执行 ${lane} 同步</div>`;
+    return `<div class="minio-sync-result minio-sync-result--idle" data-lane="${lane}"></div>`;
   }
   const klass = result.ok ? 'ok' : 'err';
   const ts = _formatMinioRelativeTimestamp(result.finished_at);
   const tsTitle = _formatMinioAbsoluteTimestamp(result.finished_at);
   const tsBlock = ts ? `<span class="minio-sync-result-ts"${tsTitle ? ` title="${esc(tsTitle)}"` : ''}>${esc(ts)}</span>` : '';
+  const summary = _minioSyncSummary(result);
+  const retryBtn = !result.ok ? `<button type="button" class="minio-sync-retry-btn" onclick="trigger${lane === 'state' ? 'MinioStateSync' : 'MinioFullSync'}()">重试</button>` : '';
   return `<div class="minio-sync-result minio-sync-result--${klass}" data-lane="${lane}">
-    <span class="minio-sync-result-summary">${esc(_minioSyncSummary(result))}</span>
-    ${tsBlock}
+    <span class="minio-sync-result-summary">${esc(summary)}</span>
+    ${retryBtn}${tsBlock}
   </div>`;
 }
 function _renderMinioWorkspaceEntries(payload) {
@@ -2323,10 +2335,8 @@ function _renderMinioWorkspaceEntries(payload) {
     ? payload.workspace_entries
     : [];
   if (!entries.length) {
-    return `<div class="minio-sync-empty">${esc('工作区为空 — 无内容可同步')}</div>`;
+    return `<div class="minio-sync-empty">📁 工作区暂无文件。创建文件后可同步到 MinIO 备份</div>`;
   }
-  // Drop selection entries whose path no longer exists on disk so the
-  // summary stays accurate after files were moved/deleted between renders.
   const liveKeys = new Set(entries.map(e => e.path));
   for (const k of Array.from(_minioWorkspaceSelection)) {
     if (!liveKeys.has(k)) _minioWorkspaceSelection.delete(k);
@@ -2374,33 +2384,106 @@ function _renderMinioGuidance(payload) {
   </ul></details>`;
 }
 function _renderMinioUnavailableCard(payload) {
-  const reason = (payload && payload.unavailable_reason)
-    || '此账户未启用 MinIO 同步';
   const registrationRequired = !!(payload && payload.registration_required);
-  const sub = registrationRequired
-    ? '当前 MinIO 凭证无效，需重新注册或申请存储空间'
-    : '此账户当前未启用 MinIO 同步';
   const url = (payload && payload.register_url) || '';
-  // Validate the URL scheme so a misconfigured env variable can't smuggle
-  // javascript:/data: into the link target.
   const safeUrl = /^https?:\/\//i.test(url) ? url : '';
-  const cta = safeUrl
-    ? `<a class="minio-sync-register-link" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">注册 / 申请存储空间 →</a>`
+  const cfg = (payload && payload.config) || {};
+
+  // Secondary registration link (small, below login)
+  const registerLink = safeUrl
+    ? `<a class="minio-unavail-register" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">还没有账号？申请存储空间 →</a>`
     : '';
+
   return `
     <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO 同步控制">
-      <div class="minio-sync-head">
-        <div>
-          <div class="insights-card-title">MinIO 同步</div>
-          <div class="minio-sync-sub">${esc(sub)}</div>
+      <div class="minio-unavail-welcome">
+        <div class="minio-unavail-icon" aria-hidden="true">☁️</div>
+        <div class="minio-unavail-title">云端同步</div>
+        <div class="minio-unavail-desc">登录后可自动同步您的工作区和配置，数据安全存储在 MinIO 中</div>
+      </div>
+      <button class="minio-unavail-login-btn" onclick="_showMinioLoginModal()" type="button">登录 MinIO</button>
+      ${registerLink}
+    </section>
+    <div class="minio-login-modal-overlay" id="minioLoginOverlay" style="display:none" onclick="_hideMinioLoginModal(event)">
+      <div class="minio-login-modal" onclick="event.stopPropagation()">
+        <div class="minio-login-modal-title">登录 MinIO 存储</div>
+        <div class="minio-login-hint">用户名即您的邮箱前缀，例如 example@byd.com 的用户名为 example</div>
+        <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="邮箱前缀" oninput="_updateMinioBucketHint()"></label>
+        <label class="minio-login-label">访问密钥 (Access Key)<input id="minioLoginAK" class="minio-login-input" placeholder="Access Key"></label>
+        <label class="minio-login-label">秘密密钥 (Secret Key)<input id="minioLoginSK" class="minio-login-input" type="password" placeholder="Secret Key"></label>
+        <div class="minio-login-derived">
+          <div class="minio-login-derived-row">Endpoint: <strong>${esc(cfg.endpoint || '—')}</strong> (${cfg.secure ? 'HTTPS' : 'HTTP'})</div>
+          <div class="minio-login-derived-row" id="minioLoginBucketHint">存储桶将自动设为: user-<em>&lt;username&gt;</em></div>
         </div>
-        <span class="minio-sync-status minio-sync-status--off"><span class="minio-sync-dot" aria-hidden="true"></span>不可用</span>
+        <div class="minio-login-error" id="minioLoginError" style="display:none"></div>
+        <div class="minio-login-btns">
+          <button class="minio-login-cancel" onclick="_hideMinioLoginModal()" type="button">取消</button>
+          <button class="minio-login-submit" id="minioLoginSubmitBtn" onclick="_submitMinioLogin()" type="button">测试连接并登录</button>
+        </div>
       </div>
-      <div class="minio-sync-unavailable">
-        <div class="minio-sync-unavailable-text">${esc(reason)}</div>
-        ${cta}
-      </div>
-    </section>`;
+    </div>`;
+}
+function _showMinioLoginModal() {
+  const el = document.getElementById('minioLoginOverlay');
+  if (el) el.style.display = 'flex';
+}
+function _hideMinioLoginModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  const el = document.getElementById('minioLoginOverlay');
+  if (el) el.style.display = 'none';
+  const err = document.getElementById('minioLoginError');
+  if (err) err.style.display = 'none';
+}
+function _updateMinioBucketHint() {
+  const username = (document.getElementById('minioLoginUsername') || {}).value || '';
+  const el = document.getElementById('minioLoginBucketHint');
+  if (el) {
+    el.textContent = username
+      ? `存储桶将自动设为: user-${username}`
+      : '存储桶将自动设为: user-<username>';
+  }
+}
+async function _submitMinioLogin() {
+  const btn = document.getElementById('minioLoginSubmitBtn');
+  const errEl = document.getElementById('minioLoginError');
+  const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
+  const access_key = (document.getElementById('minioLoginAK') || {}).value.trim();
+  const secret_key = (document.getElementById('minioLoginSK') || {}).value.trim();
+  if (!username || !access_key || !secret_key) {
+    if (errEl) { errEl.textContent = '用户名、访问密钥、秘密密钥为必填项'; errEl.style.display = 'block'; }
+    return;
+  }
+  // Derive endpoint/secure from server config, bucket/prefix from username
+  const panel = document.getElementById('minioSyncPanel');
+  const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
+  const endpoint = cfg.endpoint || '';
+  const secure = !!cfg.secure;
+  const bucket = 'user-' + username;
+  const prefix = username;
+  if (!endpoint) {
+    if (errEl) { errEl.textContent = '服务端未配置 MinIO Endpoint，请联系管理员'; errEl.style.display = 'block'; }
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
+  if (errEl) errEl.style.display = 'none';
+  try {
+    const resp = await fetch('/api/minio/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({endpoint, access_key, secret_key, bucket, prefix, secure})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      _hideMinioLoginModal();
+      if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus();
+    } else {
+      if (errEl) { errEl.textContent = data.error || '连接失败'; errEl.style.display = 'block'; }
+    }
+  } catch (ex) {
+    if (errEl) { errEl.textContent = '请求失败: ' + (ex.message || ex); errEl.style.display = 'block'; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '测试连接并登录'; }
+  }
 }
 function _renderMinioSyncPanel(payload) {
   if (!payload) return '';
@@ -2415,139 +2498,120 @@ function _renderMinioSyncPanel(payload) {
   const last = payload.last_result || {};
   const stateRunning = !!running.state;
   const wsRunning = !!running.workspace;
-  const target = `${esc(cfg.endpoint || '—')}/${esc(cfg.bucket || '—')}${cfg.prefix ? '/' + esc(cfg.prefix) : ''}`;
 
-  // Usage stats are lazy-loaded via /api/minio/sync/usage (click-to-request).
-  // On initial render we show a button; after the user clicks it we cache the
-  // result in _minioUsageCache and re-render with the numbers filled in.
+  // Human-readable status
+  const hasError = (last.state && !last.state.ok) || (last.workspace && !last.workspace.ok);
+  const isRunning = stateRunning || wsRunning;
+  let statusIcon, statusText, statusClass;
+  if (isRunning) { statusIcon = '🔄'; statusText = '同步中'; statusClass = 'syncing'; }
+  else if (hasError) { statusIcon = '⚠️'; statusText = '同步异常'; statusClass = 'error'; }
+  else { statusIcon = '✅'; statusText = '已连接 · 自动同步中'; statusClass = 'ok'; }
+
+  // Last sync time (relative)
+  const lastStateTs = last.state && last.state.finished_at;
+  const lastWsTs = last.workspace && last.workspace.finished_at;
+  const latestTs = Math.max(lastStateTs || 0, lastWsTs || 0);
+  const lastSyncLabel = latestTs ? _formatMinioRelativeTimestamp(latestTs) + '同步' : '';
+
+  // Usage — always visible
   const usageCache = _minioUsageCache;
   const quota = usageCache ? (Number(usageCache.quota_bytes) || 0) : 0;
   const used = usageCache ? (Number(usageCache.used_bytes) || 0) : 0;
-  const remaining = usageCache
-    ? ((usageCache.remaining_bytes === null || usageCache.remaining_bytes === undefined) ? null : Number(usageCache.remaining_bytes))
-    : null;
   const usedPct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const usedClass = usedPct >= 95 ? 'is-critical' : (usedPct >= 80 ? 'is-warn' : '');
-  const quotaSource = usageCache ? String((usageCache.quota_source || 'unset')).toLowerCase() : 'unset';
-  const quotaSourceLabel = (quota > 0)
-    ? (quotaSource === 'admin_api' ? '自动发现（MinIO 管理 API）'
-       : quotaSource === 'bucket_tag' ? '自动发现（存储桶标签）'
-       : quotaSource === 'env' ? '运维覆盖（HERMES_MINIO_QUOTA_BYTES）'
-       : '未知来源')
-    : '';
 
-  // Compact status line always visible
-  const statusLine = usageCache
-    ? (quota > 0 ? `已用 ${_formatMinioBytes(used)} / ${_formatMinioBytes(quota)} (${usedPct}%)` : `已用 ${_formatMinioBytes(used)}`)
-    : '用量未加载 · 点击详情内按钮查询';
-
-  let quotaBlock;
+  let usageBlock;
   if (!usageCache) {
-    quotaBlock = `<div class="minio-sync-quota minio-sync-quota--lazy">
-        <button type="button" class="minio-sync-btn" id="minioUsageBtn" onclick="triggerMinioFetchUsage()">查询用量</button>
-        <span class="minio-sync-sub">点击查询存储桶用量与配额（需访问 MinIO）</span>
-      </div>`;
+    usageBlock = `<div class="minio-usage-inline minio-usage-inline--loading">
+      <span class="minio-usage-label">存储用量</span>
+      <button type="button" class="minio-usage-load-btn" onclick="triggerMinioFetchUsage()">加载用量</button>
+    </div>`;
   } else if (quota > 0) {
-    quotaBlock = `<div class="minio-sync-quota">
-        <div class="minio-sync-quota-row">
-          <span class="minio-sync-quota-label">存储桶已用</span>
-          <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))}${usedPct ? ` (${usedPct}%)` : ''}</span>
-        </div>
-        <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
-        <div class="minio-sync-quota-row">
-          <span class="minio-sync-quota-label">剩余</span>
-          <span class="minio-sync-quota-value">${esc(remaining === null ? '—' : _formatMinioBytes(remaining))}</span>
-        </div>
-        <div class="minio-sync-quota-source" data-quota-source="${esc(quotaSource)}">${esc(quotaSourceLabel)}</div>
-        <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
-      </div>`;
+    usageBlock = `<div class="minio-usage-inline">
+      <div class="minio-usage-top">
+        <span class="minio-usage-label">存储用量</span>
+        <span class="minio-usage-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))} (${usedPct}%)</span>
+      </div>
+      <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
+    </div>`;
   } else {
-    quotaBlock = `<div class="minio-sync-quota minio-sync-quota--unset">
-         <div class="minio-sync-quota-row">
-           <span class="minio-sync-quota-label">存储桶已用</span>
-           <span class="minio-sync-quota-value">${esc(_formatMinioBytes(used))}</span>
-         </div>
-         <div class="minio-sync-quota-row">
-           <span class="minio-sync-quota-label">配额</span>
-           <span class="minio-sync-quota-value">自动发现未返回配额信息</span>
-         </div>
-         <div class="minio-sync-quota-source" data-quota-source="unset">运维可设置 HERMES_MINIO_QUOTA_BYTES 作为兜底</div>
-         <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
-       </div>`;
+    usageBlock = `<div class="minio-usage-inline">
+      <div class="minio-usage-top">
+        <span class="minio-usage-label">存储用量</span>
+        <span class="minio-usage-value">${esc(_formatMinioBytes(used))}</span>
+      </div>
+    </div>`;
   }
+
+  // State sync — compact, automatic, not prominent
+  const stateLastTs = lastStateTs ? _formatMinioRelativeTimestamp(lastStateTs) : '';
+  const stateResultBlock = (last.state && !last.state.ok) ? _renderMinioSyncResult('state', last.state) : '';
+  const stateLine = stateRunning
+    ? `<span class="minio-state-status minio-state-status--busy">🔄 状态同步中…</span>`
+    : `<span class="minio-state-status">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
+       <button type="button" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
+
+  // Workspace entries
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
-  const guidanceBlock = _renderMinioGuidance(payload);
+
+  // Guidance as tooltip trigger
+  const blocked = Array.isArray(payload.blocked_extensions) && payload.blocked_extensions.length
+    ? payload.blocked_extensions.map(e => '.' + e).join('、')
+    : '';
+  const guidanceTooltip = `状态（技能、会话等）每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步。工作区文件需手动同步。${blocked ? '禁传扩展名：' + blocked : ''}同步不会删除本地文件。`;
 
   return `
-    <section class="insights-card minio-sync-panel" id="minioSyncPanel" aria-label="MinIO 同步控制">
+    <section class="insights-card minio-sync-panel minio-sync-panel--active" id="minioSyncPanel" aria-label="MinIO 同步控制">
       <div class="minio-sync-head">
         <div>
-          <div class="insights-card-title">MinIO 同步</div>
-          <div class="minio-sync-sub">${esc(statusLine)} · ${cfg.secure ? 'HTTPS' : 'HTTP'}</div>
+          <div class="insights-card-title">☁️ 云端同步</div>
+          <div class="minio-sync-sub">${esc(statusIcon)} ${esc(statusText)}${lastSyncLabel ? ' · ' + esc(lastSyncLabel) : ''}</div>
         </div>
-        <span class="minio-sync-status" id="minioSyncStatus"><span class="minio-sync-dot" aria-hidden="true"></span>${esc(target)}</span>
+        <span class="minio-sync-status minio-sync-status--${statusClass}"><span class="minio-sync-dot minio-sync-dot--${statusClass}" aria-hidden="true"></span>已连接</span>
       </div>
 
-      <details class="minio-sync-collapse" id="minioSyncDetails">
-        <summary class="minio-sync-collapse-toggle">展开详情</summary>
+      ${usageBlock}
 
-        ${quotaBlock}
+      <div class="minio-state-row">
+        <span class="minio-state-label">Hermes 状态</span>
+        ${stateLine}
+      </div>
+      ${stateResultBlock}
 
-        ${guidanceBlock}
-
-        <div class="minio-sync-row">
-          <div class="minio-sync-row-info">
-            <div class="minio-sync-row-title">Hermes 状态</div>
-            <div class="minio-sync-row-sub">技能、会话、记忆、看板等。每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步一次，无需手动操作；此按钮可立即触发一次。${last.state && last.state.finished_at ? (() => { const rel = _formatMinioRelativeTimestamp(last.state.finished_at); const abs = _formatMinioAbsoluteTimestamp(last.state.finished_at); return rel ? '上次同步：' + `<span${abs ? ` title="${esc(abs)}"` : ''}>${esc(rel)}</span>` : ''; })() : ''}</div>
-            ${_renderMinioSyncResult('state', last.state)}
-          </div>
-          <div class="minio-sync-row-actions">
-            <button type="button" class="minio-sync-btn" id="minioSyncStateBtn" onclick="triggerMinioStateSync()" ${stateRunning ? 'disabled' : ''}>
-              ${stateRunning ? '同步中…' : '立即同步状态'}
-            </button>
-          </div>
+      <div class="minio-workspace-section">
+        <div class="minio-workspace-header">
+          <span class="minio-workspace-title">📁 工作区同步</span>
+          <span class="minio-workspace-help" title="${esc(guidanceTooltip)}">ℹ️</span>
         </div>
-
-        <div class="minio-sync-row minio-sync-row--workspace">
-          <div class="minio-sync-row-info">
-            <div class="minio-sync-row-title">工作区</div>
-            <div class="minio-sync-row-sub"><code>workspace/</code> 下的用户文件。请选择操作方式：</div>
-            ${entriesBlock}
-            <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
-            ${_renderMinioSyncResult('workspace', last.workspace)}
-          </div>
-          <div class="minio-sync-row-actions minio-sync-row-actions--multi">
-            <button type="button" class="minio-sync-btn minio-sync-btn--full" id="minioSyncFullBtn" onclick="triggerMinioFullSync()" ${wsRunning ? 'disabled' : ''} title="以本地工作区为准覆盖远端全部文件（排除禁传扩展名），并删除远端多余文件">
-              ${wsRunning ? '同步中…' : '同步'}
-            </button>
-            <button type="button" class="minio-sync-btn" id="minioSyncUploadBtn" onclick="triggerMinioUploadSelected()" ${wsRunning ? 'disabled' : ''} title="仅上传勾选的文件/文件夹（安全模式，不删除远端）">
-              ${wsRunning ? '上传中…' : '上传'}
-            </button>
-          </div>
+        <div class="minio-workspace-desc">将本地工作区文件安全备份到 MinIO</div>
+        ${entriesBlock}
+        <div class="minio-sync-warn minio-sync-quota-warn" id="minioQuotaWarn" hidden></div>
+        ${_renderMinioSyncResult('workspace', last.workspace)}
+        <div class="minio-workspace-actions">
+          <button type="button" class="minio-sync-btn minio-sync-btn--primary" id="minioSyncFullBtn" onclick="triggerMinioFullSync()" ${wsRunning ? 'disabled' : ''}>
+            ${wsRunning ? '🔄 同步中…' : '一键同步工作区'}
+          </button>
+          <button type="button" class="minio-sync-btn minio-sync-btn--secondary" id="minioSyncUploadBtn" onclick="triggerMinioUploadSelected()" ${wsRunning ? 'disabled' : ''}>
+            ${wsRunning ? '上传中…' : '选择文件上传'}
+          </button>
         </div>
+      </div>
 
-        <div class="minio-sync-row minio-sync-row--browse">
-          <div class="minio-sync-row-info">
-            <div class="minio-sync-row-title">查看远端文件</div>
-            <div class="minio-sync-row-sub">查看当前 MinIO 中已存储的文件列表</div>
+      <div class="minio-footer-links">
+        <button type="button" class="minio-footer-link" onclick="triggerMinioBrowseRemote()">查看远端文件</button>
+        <details class="minio-advanced-section">
+          <summary class="minio-advanced-toggle">高级操作</summary>
+          <div class="minio-advanced-body">
+            <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
+            <div class="minio-purge-zone">
+              <div class="minio-purge-warn">⚠️ 删除 MinIO 中该前缀下的所有对象并停止同步。<strong>此操作不可撤销。</strong></div>
+              <button type="button" class="minio-sync-btn minio-sync-btn--danger" id="minioPurgeBtn" onclick="triggerMinioPurgeAndStop()">清除数据并停止同步</button>
+              <div id="minioPurgeResult"></div>
+            </div>
           </div>
-          <div class="minio-sync-row-actions">
-            <button type="button" class="minio-sync-btn" id="minioBrowseBtn" onclick="triggerMinioBrowseRemote()">查看</button>
-          </div>
-        </div>
-        <div class="minio-remote-files" id="minioRemoteFiles" hidden></div>
-
-        <div class="minio-sync-row minio-sync-row--purge">
-          <div class="minio-sync-row-info">
-            <div class="minio-sync-row-title">清除数据并停止同步</div>
-            <div class="minio-sync-row-sub">删除 MinIO 中该前缀下的所有对象，并停止后台同步守护进程。<strong>此操作不可撤销。</strong></div>
-            <div id="minioPurgeResult"></div>
-          </div>
-          <div class="minio-sync-row-actions">
-            <button type="button" class="minio-sync-btn minio-sync-btn--danger" id="minioPurgeBtn" onclick="triggerMinioPurgeAndStop()">清除数据并停止同步</button>
-          </div>
-        </div>
-      </details>
+        </details>
+      </div>
+      <div class="minio-remote-files" id="minioRemoteFiles" hidden></div>
     </section>`;
 }
 function _bindMinioSyncControls() {

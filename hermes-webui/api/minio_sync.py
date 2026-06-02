@@ -289,6 +289,38 @@ def _probe_registration_requirement(cfg: dict[str, Any], configured: bool) -> di
     return result
 
 
+def try_minio_login(endpoint: str, access_key: str, secret_key: str, bucket: str, prefix: str = "", secure: bool = False) -> dict[str, Any]:
+    """Test MinIO credentials and update process env vars on success."""
+    try:
+        from minio import Minio
+    except ImportError:
+        return {"ok": False, "error": "minio 库未安装"}
+    try:
+        client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        if not client.bucket_exists(bucket):
+            return {"ok": False, "error": f"存储桶 '{bucket}' 不存在"}
+    except Exception as exc:
+        if _looks_like_invalid_minio_credentials(exc):
+            return {"ok": False, "error": "访问密钥或秘密密钥无效"}
+        return {"ok": False, "error": str(exc)}
+    # Update process env vars
+    os.environ["HERMES_MINIO_ENABLED"] = "true"
+    os.environ["HERMES_MINIO_ENDPOINT"] = endpoint
+    os.environ["HERMES_MINIO_ACCESS_KEY"] = access_key
+    os.environ["HERMES_MINIO_SECRET_KEY"] = secret_key
+    os.environ["HERMES_MINIO_BUCKET"] = bucket
+    os.environ["HERMES_MINIO_PREFIX"] = prefix
+    os.environ["HERMES_MINIO_SECURE"] = "true" if secure else "false"
+    # Invalidate credential probe cache
+    _credential_probe_cache["result"] = None
+    _credential_probe_cache["expires_at"] = 0.0
+    # Reset the loaded module so it picks up new env vars on next use
+    global _minio_sync_module, _minio_sync_module_load_failed
+    _minio_sync_module = None
+    _minio_sync_module_load_failed = False
+    return {"ok": True}
+
+
 def _list_workspace_entries() -> list[dict[str, Any]]:
     module = _load_minio_sync_module()
     if module is None or not hasattr(module, "list_workspace_entries"):
