@@ -2249,6 +2249,7 @@ function _renderSystemHealthPanel() {
 // WebUI prefers service-derived values (admin API / bucket tag) and only
 // shows the env-override fallback when nothing better is available.
 let _minioSyncStatusCache = null;
+let _minioSyncLatencyMs = 0;  // last status API response time in ms
 // Lazy-loaded usage/quota data — only populated when user clicks "查询用量".
 let _minioUsageCache = null;
 let _minioUsageLoading = false;
@@ -2594,11 +2595,27 @@ function _renderMinioSyncPanel(payload) {
     : '';
   const guidanceTooltip = `状态（技能、会话等）每 ${Number(cfg.sync_interval_seconds) || 300} 秒自动同步。工作区文件需手动同步。${blocked ? '禁传扩展名：' + blocked : ''}同步不会删除本地文件。`;
 
+  // Latency indicator
+  const latMs = _minioSyncLatencyMs || 0;
+  let latColor, latLabel, latTip;
+  if (latMs <= 0) {
+    latColor = '#5f6368'; latLabel = '—'; latTip = '';
+  } else if (latMs < 1000) {
+    latColor = '#34a853'; latLabel = (latMs / 1000).toFixed(1) + 's'; latTip = 'MinIO 响应正常';
+  } else if (latMs < 3000) {
+    latColor = '#fbbc04'; latLabel = (latMs / 1000).toFixed(1) + 's'; latTip = 'MinIO 响应较慢，操作可能需要等待';
+  } else if (latMs < 8000) {
+    latColor = '#ff6d01'; latLabel = (latMs / 1000).toFixed(0) + 's'; latTip = 'MinIO 拥堵，建议暂不操作';
+  } else {
+    latColor = '#ea4335'; latLabel = (latMs / 1000).toFixed(0) + 's'; latTip = 'MinIO 严重拥堵，请稍后再试';
+  }
+  const latHtml = `<span class="minio-latency-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${latColor};margin-left:6px;vertical-align:middle" title="${esc(latTip)}"></span><span class="minio-latency-text" style="font-size:10px;color:${latColor};margin-left:2px" title="${esc(latTip)}">${esc(latLabel)}</span>`;
+
   return `
     <section class="insights-card minio-sync-panel minio-sync-panel--active" id="minioSyncPanel" aria-label="MinIO 同步控制">
       <div class="minio-sync-head">
         <div>
-          <div class="insights-card-title">☁️ 云端同步</div>
+          <div class="insights-card-title">☁️ 云端同步${latHtml}</div>
           <div class="minio-sync-sub">${esc(statusIcon)} ${esc(statusText)}${lastSyncLabel ? ' · ' + esc(lastSyncLabel) : ''}</div>
         </div>
         <span class="minio-sync-status minio-sync-status--${statusClass}"><span class="minio-sync-dot minio-sync-dot--${statusClass}" aria-hidden="true"></span>已连接</span>
@@ -2737,7 +2754,9 @@ async function refreshMinioSyncStatus() {
   }
 
   try {
+    const _t0 = Date.now();
     const payload = await api('/api/minio/sync/status');
+    _minioSyncLatencyMs = Date.now() - _t0;
     _minioSyncStatusCache = payload;
     const html = _renderMinioSyncPanel(payload);
     if (!html) {
