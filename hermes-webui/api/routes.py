@@ -2913,6 +2913,10 @@ def handle_get(handler, parsed) -> bool:
         from api import minio_sync as _minio_sync
         return j(handler, _minio_sync.get_remote_files())
 
+    if parsed.path == "/api/minio/startup-restore/status":
+        from api import minio_sync as _minio_sync
+        return j(handler, _minio_sync.get_startup_restore_status())
+
     if parsed.path == "/api/models":
         return j(handler, get_available_models())
 
@@ -4975,6 +4979,17 @@ def handle_post(handler, parsed) -> bool:
         )
         status = 200 if result.get("ok") else 409
         return j(handler, result, status=status)
+
+    if parsed.path == "/api/minio/startup-restore/trigger":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.trigger_startup_restore()
+        status = 200 if result.get("ok") else 409
+        return j(handler, result, status=status)
+
+    if parsed.path == "/api/minio/startup-restore/skip":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.skip_startup_restore()
+        return j(handler, result)
 
     if parsed.path == "/api/minio/login":
         from api import minio_sync as _minio_sync

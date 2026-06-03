@@ -692,3 +692,194 @@ def trigger_workspace_sync(
         args.append("--paths")
         args.extend(validated_paths)
     return _spawn_lane("workspace", args)
+
+
+# ── Startup Restore (async, with skip support) ──────────────────────────────
+#
+# The old flow ran `minio_sync.py restore` synchronously in start.sh before
+# the WebUI started, which meant the user stared at a blank page while MinIO
+# was slow.  Now the WebUI starts immediately and triggers the restore via
+# these API functions.  The user sees a loading overlay with progress and can
+# click "skip" to enter the app without MinIO.
+
+_startup_restore_lock = threading.Lock()
+_startup_restore_state: dict[str, Any] = {
+    "status": "idle",       # idle | running | done | failed | skipped
+    "phase": "",            # human-readable phase description
+    "started_at": 0.0,
+    "finished_at": 0.0,
+    "error": None,
+    "skipped": False,
+}
+_startup_restore_skip_flag = threading.Event()
+
+
+def get_startup_restore_status() -> dict[str, Any]:
+    """Return the current startup-restore progress for the frontend."""
+    with _startup_restore_lock:
+        return dict(_startup_restore_state)
+
+
+def skip_startup_restore() -> dict[str, Any]:
+    """Signal the running restore to stop and mark as skipped.
+
+    If no restore is running, just sets the flag so the next call to
+    ``trigger_startup_restore`` will be a no-op.
+    """
+    _startup_restore_skip_flag.set()
+    with _startup_restore_lock:
+        if _startup_restore_state["status"] in ("idle", "running"):
+            _startup_restore_state["status"] = "skipped"
+            _startup_restore_state["skipped"] = True
+            _startup_restore_state["finished_at"] = time.time()
+            _startup_restore_state["phase"] = "已跳过 MinIO 恢复，使用本地数据"
+    # Write a flag file so the shell also knows to skip on next restart
+    try:
+        flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text(str(int(time.time())))
+    except Exception as exc:
+        logger.debug("Failed to write skip flag: %s", exc)
+    return {"ok": True, "status": "skipped"}
+
+
+def trigger_startup_restore() -> dict[str, Any]:
+    """Kick off the MinIO restore in a background thread.
+
+    Returns immediately with ``{"ok": True, "status": "running"}`` or
+    ``{"ok": True, "status": "skipped"}`` if the user already skipped.
+    """
+    with _startup_restore_lock:
+        current = _startup_restore_state["status"]
+        if current == "running":
+            return {"ok": True, "status": "running", "message": "恢复已在进行中"}
+        if current == "done":
+            return {"ok": True, "status": "done", "message": "恢复已完成"}
+        if current == "skipped" or _startup_restore_skip_flag.is_set():
+            return {"ok": True, "status": "skipped", "message": "用户已跳过恢复"}
+
+        cfg = _public_config()
+        configured, reason = _config_completeness(cfg)
+        if not configured:
+            return {"ok": False, "status": "not_configured",
+                    "error": reason or "MinIO 未配置"}
+
+        # Check if already skipped via flag file
+        try:
+            flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
+            if flag.exists():
+                _startup_restore_skip_flag.set()
+                _startup_restore_state["status"] = "skipped"
+                _startup_restore_state["skipped"] = True
+                _startup_restore_state["phase"] = "已跳过 MinIO 恢复"
+                return {"ok": True, "status": "skipped", "message": "用户已跳过恢复"}
+        except Exception:
+            pass
+
+        _startup_restore_state["status"] = "running"
+        _startup_restore_state["phase"] = "正在连接 MinIO..."
+        _startup_restore_state["started_at"] = time.time()
+        _startup_restore_state["finished_at"] = 0.0
+        _startup_restore_state["error"] = None
+
+    _startup_restore_skip_flag.clear()
+    t = threading.Thread(target=_run_startup_restore, daemon=True)
+    t.start()
+    return {"ok": True, "status": "running", "message": "恢复已启动"}
+
+
+def clear_startup_restore_skip() -> dict[str, Any]:
+    """Clear the skip flag so restore can be attempted again on next startup."""
+    _startup_restore_skip_flag.clear()
+    with _startup_restore_lock:
+        if _startup_restore_state["status"] == "skipped":
+            _startup_restore_state["status"] = "idle"
+            _startup_restore_state["skipped"] = False
+            _startup_restore_state["phase"] = ""
+    try:
+        flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
+        flag.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+def _run_startup_restore():
+    """Background worker: run the actual MinIO restore."""
+    try:
+        script = _find_minio_sync_script()
+        if script is None:
+            with _startup_restore_lock:
+                _startup_restore_state["status"] = "failed"
+                _startup_restore_state["phase"] = "minio_sync.py 脚本未找到"
+                _startup_restore_state["finished_at"] = time.time()
+                _startup_restore_state["error"] = "minio_sync.py not found"
+            return
+
+        with _startup_restore_lock:
+            _startup_restore_state["phase"] = "正在从 MinIO 下载数据..."
+
+        # Build the command — same as what start.sh used to run
+        python = _python_executable()
+        cmd = [python, str(script), "restore"]
+
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+        # Stream output, checking for skip flag periodically
+        output_lines = []
+        while True:
+            if _startup_restore_skip_flag.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                with _startup_restore_lock:
+                    _startup_restore_state["status"] = "skipped"
+                    _startup_restore_state["phase"] = "已跳过 MinIO 恢复"
+                    _startup_restore_state["finished_at"] = time.time()
+                return
+
+            line = proc.stdout.readline()
+            if line:
+                output_lines.append(line.rstrip())
+                # Update phase from subprocess output (last meaningful line)
+                stripped = line.strip()
+                if stripped and not stripped.startswith("["):
+                    with _startup_restore_lock:
+                        _startup_restore_state["phase"] = stripped[:120]
+            elif proc.poll() is not None:
+                break
+
+        rc = proc.wait()
+        with _startup_restore_lock:
+            if rc == 0:
+                _startup_restore_state["status"] = "done"
+                _startup_restore_state["phase"] = "恢复完成"
+                _startup_restore_state["finished_at"] = time.time()
+                # Update last_workspace.txt as the old start.sh did
+                try:
+                    ws = os.environ.get("HERMES_WORKSPACE", "/home/hermes/workspace")
+                    state_dir = os.environ.get("HERMES_WEBUI_STATE_DIR", "")
+                    if state_dir:
+                        Path(state_dir, "last_workspace.txt").write_text(ws + "\n")
+                except Exception:
+                    pass
+            else:
+                tail = "\n".join(output_lines[-5:]) if output_lines else "无输出"
+                _startup_restore_state["status"] = "failed"
+                _startup_restore_state["phase"] = f"恢复失败 (exit code {rc})"
+                _startup_restore_state["finished_at"] = time.time()
+                _startup_restore_state["error"] = tail
+
+    except Exception as exc:
+        with _startup_restore_lock:
+            _startup_restore_state["status"] = "failed"
+            _startup_restore_state["phase"] = f"恢复异常: {exc}"
+            _startup_restore_state["finished_at"] = time.time()
+            _startup_restore_state["error"] = str(exc)

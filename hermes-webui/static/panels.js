@@ -6632,3 +6632,158 @@ async function _restoreCheckpoint(workspace,checkpoint,message){
     /* test-only contexts may lack the expected globals; silently skip */
   }
 })();
+
+// ── MinIO Startup Restore UI ────────────────────────────────────────────────
+//
+// On page load, if MinIO is enabled, shows a fullscreen overlay with restore
+// progress and a skip button.  The overlay blocks interaction until the
+// restore finishes, is skipped, or fails.
+//
+(function _bootstrapMinioStartupRestore(){
+  try {
+    const readyState = (typeof document !== 'undefined' && document)
+      ? document.readyState : undefined;
+    if (readyState === 'loading' && typeof document !== 'undefined'
+        && document.addEventListener) {
+      document.addEventListener('DOMContentLoaded',
+        () => setTimeout(_initMinioStartupRestore, 100), { once: true });
+    } else if (typeof setTimeout === 'function') {
+      setTimeout(_initMinioStartupRestore, 100);
+    }
+  } catch (_) { /* tolerated */ }
+})();
+
+var _minioRestoreTimer = null;
+var _minioRestoreStartTime = 0;
+var _minioRestorePolling = false;
+
+async function _initMinioStartupRestore() {
+  try {
+    const overlay = document.getElementById('minioRestoreOverlay');
+    if (!overlay) return;
+
+    // Check if MinIO is configured by hitting the status API
+    let statusPayload;
+    try {
+      statusPayload = await api('/api/minio/sync/status');
+    } catch (_) { return; }
+
+    if (!statusPayload) return;
+    const cfg = statusPayload.config || {};
+    if (!cfg.enabled || !statusPayload.configured) return;
+
+    // MinIO is enabled — check if restore is needed
+    const restoreStatus = await api('/api/minio/startup-restore/status');
+    if (!restoreStatus) return;
+
+    // If already done or skipped, don't show overlay
+    if (restoreStatus.status === 'done' || restoreStatus.status === 'skipped') return;
+
+    // Show the overlay and trigger restore
+    overlay.style.display = 'flex';
+    _minioRestoreStartTime = Date.now();
+
+    // Start timer
+    _minioRestoreTimer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - _minioRestoreStartTime) / 1000);
+      const timerEl = document.getElementById('minioRestoreTimer');
+      if (timerEl) timerEl.textContent = `已等待 ${elapsed} 秒`;
+    }, 1000);
+
+    // Trigger the restore
+    const triggerResult = await api('/api/minio/startup-restore/trigger', {
+      method: 'POST', body: JSON.stringify({})
+    });
+
+    if (!triggerResult) {
+      _hideMinioRestoreOverlay();
+      return;
+    }
+
+    // If restore was already done or not configured, hide immediately
+    if (triggerResult.status === 'done' || triggerResult.status === 'skipped'
+        || triggerResult.status === 'not_configured') {
+      _finishMinioRestoreOverlay(triggerResult.status);
+      return;
+    }
+
+    // Start polling
+    _minioRestorePolling = true;
+    _pollMinioRestore();
+
+  } catch (_) { /* tolerated — don't break the page */ }
+}
+
+async function _pollMinioRestore() {
+  if (!_minioRestorePolling) return;
+  try {
+    const status = await api('/api/minio/startup-restore/status');
+    if (!status) { setTimeout(_pollMinioRestore, 3000); return; }
+
+    // Update phase text
+    const phaseEl = document.getElementById('minioRestorePhase');
+    if (phaseEl && status.phase) phaseEl.textContent = status.phase;
+
+    // Animate progress bar (indeterminate — pulse between 20%-80%)
+    const fillEl = document.getElementById('minioRestoreProgressFill');
+    if (fillEl && status.status === 'running') {
+      const elapsed = (Date.now() - _minioRestoreStartTime) / 1000;
+      // Slowly advance progress bar, capping at 85% until done
+      const pct = Math.min(85, 20 + (elapsed / 120) * 65);
+      fillEl.style.width = pct + '%';
+    }
+
+    if (status.status === 'done') {
+      _finishMinioRestoreOverlay('done');
+    } else if (status.status === 'failed') {
+      _finishMinioRestoreOverlay('failed');
+    } else if (status.status === 'skipped') {
+      _finishMinioRestoreOverlay('skipped');
+    } else {
+      setTimeout(_pollMinioRestore, 2000);
+    }
+  } catch (_) {
+    setTimeout(_pollMinioRestore, 3000);
+  }
+}
+
+function _finishMinioRestoreOverlay(status) {
+  _minioRestorePolling = false;
+  if (_minioRestoreTimer) { clearInterval(_minioRestoreTimer); _minioRestoreTimer = null; }
+
+  const overlay = document.getElementById('minioRestoreOverlay');
+  if (!overlay) return;
+
+  if (status === 'done') {
+    overlay.classList.add('is-done');
+    const phaseEl = document.getElementById('minioRestorePhase');
+    if (phaseEl) phaseEl.textContent = '✅ 恢复完成，正在加载...';
+    const fillEl = document.getElementById('minioRestoreProgressFill');
+    if (fillEl) fillEl.style.width = '100%';
+    // Hide after a brief celebration
+    setTimeout(() => { _hideMinioRestoreOverlay(); }, 1200);
+  } else if (status === 'failed') {
+    const phaseEl = document.getElementById('minioRestorePhase');
+    if (phaseEl) phaseEl.textContent = '⚠️ 恢复失败，将使用本地数据';
+    setTimeout(() => { _hideMinioRestoreOverlay(); }, 2000);
+  } else {
+    // skipped
+    _hideMinioRestoreOverlay();
+  }
+}
+
+function _hideMinioRestoreOverlay() {
+  _minioRestorePolling = false;
+  if (_minioRestoreTimer) { clearInterval(_minioRestoreTimer); _minioRestoreTimer = null; }
+  const overlay = document.getElementById('minioRestoreOverlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
+async function _skipMinioRestore() {
+  const btn = document.getElementById('minioRestoreSkipBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '正在跳过...'; }
+  try {
+    await api('/api/minio/startup-restore/skip', { method: 'POST', body: JSON.stringify({}) });
+  } catch (_) { /* tolerated */ }
+  _finishMinioRestoreOverlay('skipped');
+}

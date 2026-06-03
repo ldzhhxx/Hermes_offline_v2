@@ -123,20 +123,13 @@ if [[ "$(id -u)" == "0" ]]; then
   chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
 fi
 
-# ── MinIO State Restore (before starting services) ──────────────────────────
+# ── MinIO State Restore ─────────────────────────────────────────────────────
+# NOTE: MinIO restore is now handled asynchronously by the WebUI after startup.
+# The blocking restore has been moved to an API endpoint so the user sees a
+# loading UI with progress feedback and can skip if MinIO is too slow.
 MINIO_ENABLED="${HERMES_MINIO_ENABLED:-false}"
 if [[ "${MINIO_ENABLED}" == "true" ]]; then
-  log "MinIO storage mode enabled. Attempting state restore..."
-  if start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py restore; then
-    log "MinIO restore succeeded. Resetting startup workspace to ${HERMES_WORKSPACE}."
-    printf '%s\n' "${HERMES_WORKSPACE}" > "${HERMES_WEBUI_STATE_DIR}/last_workspace.txt"
-  else
-    log "WARNING: MinIO restore failed or no backup found. Starting with current local state."
-  fi
-  if [[ "$(id -u)" == "0" ]]; then
-    log "Re-fixing ownership after MinIO restore..."
-    chown -R hermes:hermes "${HERMES_HOME}" "${HERMES_WORKSPACE}"
-  fi
+  log "MinIO storage mode enabled. Restore will be handled by WebUI after startup."
 fi
 # ────────────────────────────────────────────────────────────────────────────
 

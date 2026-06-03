@@ -60,6 +60,52 @@
   </script>
 </head>
 <body>
+<!-- ── MinIO Startup Restore Overlay ──────────────────────────────────── -->
+<!-- Shown on page load when MinIO is enabled. Displays restore progress
+     and lets the user skip if MinIO is too slow. Hidden automatically
+     when restore completes or if MinIO is not configured. -->
+<style>
+.minio-restore-overlay{position:fixed;inset:0;z-index:1100;background:rgba(7,12,19,.85);backdrop-filter:blur(10px);display:none;align-items:center;justify-content:center;padding:24px;}
+.minio-restore-card{text-align:center;max-width:440px;width:100%;padding:40px 32px 32px;border-radius:20px;background:linear-gradient(180deg,rgba(20,30,44,.98),rgba(11,17,27,.98));border:1px solid rgba(255,255,255,.08);box-shadow:0 24px 80px rgba(0,0,0,.45);}
+.minio-restore-icon{font-size:48px;margin-bottom:16px;animation:minio-restore-float 3s ease-in-out infinite;}
+@keyframes minio-restore-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
+.minio-restore-title{margin:0 0 8px;font-size:20px;font-weight:700;color:#e8eaed;}
+.minio-restore-desc{margin:0 0 24px;font-size:13px;color:#9aa0a6;line-height:1.6;}
+.minio-restore-progress-wrap{margin-bottom:16px;}
+.minio-restore-progress-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;}
+.minio-restore-progress-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,#4285f4,#34a853);width:0%;transition:width .4s ease;animation:minio-restore-pulse 2s ease-in-out infinite;}
+@keyframes minio-restore-pulse{0%,100%{opacity:.7}50%{opacity:1}}
+.minio-restore-phase{margin-top:10px;font-size:12px;color:#9aa0a6;min-height:18px;}
+.minio-restore-timer{font-size:12px;color:#5f6368;margin-bottom:20px;}
+.minio-restore-actions{margin-bottom:12px;}
+.minio-restore-skip-btn{padding:10px 28px;border-radius:10px;border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);color:#e8eaed;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s ease;}
+.minio-restore-skip-btn:hover{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);}
+.minio-restore-skip-btn:active{transform:scale(.97);}
+.minio-restore-hint{font-size:11px;color:#5f6368;line-height:1.5;max-width:320px;margin:0 auto;}
+.minio-restore-overlay.is-done .minio-restore-progress-fill{width:100%;background:linear-gradient(90deg,#34a853,#0f9d58);animation:none;}
+.minio-restore-overlay.is-done .minio-restore-icon{animation:none;}
+</style>
+<div id="minioRestoreOverlay" class="minio-restore-overlay" style="display:none">
+  <div class="minio-restore-card">
+    <div class="minio-restore-icon">☁️</div>
+    <h2 class="minio-restore-title">正在从云端恢复数据</h2>
+    <p class="minio-restore-desc">首次启动需要从 MinIO 同步您的工作区和配置，请稍候...</p>
+    <div class="minio-restore-progress-wrap">
+      <div class="minio-restore-progress-bar">
+        <div class="minio-restore-progress-fill" id="minioRestoreProgressFill"></div>
+      </div>
+      <div class="minio-restore-phase" id="minioRestorePhase">正在连接 MinIO...</div>
+    </div>
+    <div class="minio-restore-timer" id="minioRestoreTimer">已等待 0 秒</div>
+    <div class="minio-restore-actions">
+      <button type="button" class="minio-restore-skip-btn" id="minioRestoreSkipBtn" onclick="_skipMinioRestore()">
+        跳过恢复，使用本地数据
+      </button>
+    </div>
+    <div class="minio-restore-hint">跳过后将使用容器内现有数据，不加载云端备份。此操作可随时在设置中撤销。</div>
+  </div>
+</div>
+<!-- ───────────────────────────────────────────────────────────────────── -->
 <header class="app-titlebar" role="banner">
   <button class="app-titlebar-hamburger has-tooltip has-tooltip--bottom" id="btnHamburger" onclick="toggleMobileSidebar()" type="button" data-tooltip="Menu" aria-label="Menu">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>

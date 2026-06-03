@@ -1,32 +1,31 @@
 import pathlib
-import re
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 START_SH = (REPO_ROOT / "scripts" / "start.sh").read_text(encoding="utf-8")
 
 
-def test_minio_restore_success_resets_last_workspace_to_home_workspace():
-    assert 'if start_as_hermes /opt/hermes-offline /opt/hermes-offline/.venv/bin/python /opt/hermes-offline/scripts/minio_sync.py restore; then' in START_SH, (
-        'start.sh must branch on MinIO restore success so startup-only workspace reset happens only after a real restore'
-    )
-    assert 'printf \'%s\\n\' "${HERMES_WORKSPACE}" > "${HERMES_WEBUI_STATE_DIR}/last_workspace.txt"' in START_SH, (
-        'successful MinIO restore must reset last_workspace.txt to HERMES_WORKSPACE so startup lands in /home/hermes/workspace'
+def test_start_sh_does_not_block_on_minio_restore():
+    """start.sh must NOT run minio_sync.py restore synchronously.
+
+    The restore is now handled asynchronously by the WebUI after startup
+    so the user sees a loading UI with progress and can skip.
+    """
+    assert 'minio_sync.py restore' not in START_SH, (
+        'start.sh must not run minio_sync.py restore synchronously. '
+        'Restore is now handled by the WebUI API.'
     )
 
 
-def test_minio_restore_failure_keeps_existing_workspace_selection():
-    block_match = re.search(
-        r'if \[\[ "\$\{MINIO_ENABLED\}" == "true" \]\]; then(?P<body>.*?)^fi$',
-        START_SH,
-        re.MULTILINE | re.DOTALL,
+def test_start_sh_still_starts_minio_daemon():
+    """start.sh must still start the periodic MinIO sync daemon."""
+    assert 'minio_sync.py daemon' in START_SH, (
+        'start.sh must still start the MinIO sync daemon for periodic state sync.'
     )
-    assert block_match, 'could not find MinIO startup block in start.sh'
-    body = block_match.group('body')
-    success_pos = body.find('printf \'%s\\n\' "${HERMES_WORKSPACE}" > "${HERMES_WEBUI_STATE_DIR}/last_workspace.txt"')
-    warning_pos = body.find('log "WARNING: MinIO restore failed or no backup found. Starting with current local state."')
-    assert success_pos != -1, 'success path must write last_workspace.txt'
-    assert warning_pos != -1, 'failure path warning missing'
-    assert success_pos < warning_pos, (
-        'workspace reset must live only in the restore-success path, not after the failure warning'
+
+
+def test_start_sh_logs_minio_enabled():
+    """start.sh logs when MinIO is enabled so operators see it in container logs."""
+    assert 'MinIO storage mode enabled' in START_SH, (
+        'start.sh must log when MinIO is enabled.'
     )
