@@ -2408,13 +2408,12 @@ function _renderMinioUnavailableCard(payload) {
     <div class="minio-login-modal-overlay" id="minioLoginOverlay" style="display:none" onclick="_hideMinioLoginModal(event)">
       <div class="minio-login-modal" onclick="event.stopPropagation()">
         <div class="minio-login-modal-title">登录 MinIO 存储</div>
-        <div class="minio-login-hint">用户名即您的邮箱前缀，例如 example@byd.com 的用户名为 example</div>
-        <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="邮箱前缀" oninput="_updateMinioBucketHint()"></label>
-        <label class="minio-login-label">访问密钥 (Access Key)<input id="minioLoginAK" class="minio-login-input" placeholder="Access Key"></label>
-        <label class="minio-login-label">秘密密钥 (Secret Key)<input id="minioLoginSK" class="minio-login-input" type="password" placeholder="Secret Key"></label>
+        <div class="minio-login-hint">用户名为您的邮箱前缀（去掉"."），例如 zhang.san66@byd.com 的用户名为 <strong>zhangsan66</strong></div>
+        <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66" oninput="_updateMinioBucketHint()"></label>
+        <label class="minio-login-label">密码<input id="minioLoginSK" class="minio-login-input" type="password" placeholder="密码"></label>
         <div class="minio-login-derived">
           <div class="minio-login-derived-row">Endpoint: <strong>${esc(cfg.endpoint || '—')}</strong> (${cfg.secure ? 'HTTPS' : 'HTTP'})</div>
-          <div class="minio-login-derived-row" id="minioLoginBucketHint">存储桶将自动设为: user-<em>&lt;username&gt;</em></div>
+          <div class="minio-login-derived-row" id="minioLoginBucketHint">存储桶: user-<em>&lt;用户名&gt;</em></div>
         </div>
         <div class="minio-login-error" id="minioLoginError" style="display:none"></div>
         <div class="minio-login-btns">
@@ -2440,29 +2439,32 @@ function _updateMinioBucketHint() {
   const el = document.getElementById('minioLoginBucketHint');
   if (el) {
     el.textContent = username
-      ? `存储桶将自动设为: user-${username}`
-      : '存储桶将自动设为: user-<username>';
+      ? `存储桶: user-${username}`
+      : '存储桶: user-<用户名>';
   }
 }
 async function _submitMinioLogin() {
   const btn = document.getElementById('minioLoginSubmitBtn');
   const errEl = document.getElementById('minioLoginError');
   const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
-  const access_key = (document.getElementById('minioLoginAK') || {}).value.trim();
   const secret_key = (document.getElementById('minioLoginSK') || {}).value.trim();
-  if (!username || !access_key || !secret_key) {
-    if (errEl) { errEl.textContent = '用户名、访问密钥、秘密密钥为必填项'; errEl.style.display = 'block'; }
+  if (!username || !secret_key) {
+    if (errEl) { errEl.textContent = '用户名和密码为必填项'; errEl.style.display = 'block'; }
     return;
   }
-  // Derive endpoint/secure from server config, bucket/prefix from username
-  const panel = document.getElementById('minioSyncPanel');
+  // Derive everything from username + server config
   const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
   const endpoint = cfg.endpoint || '';
   const secure = !!cfg.secure;
+  const prefix = (cfg.prefix || '').trim();
+  const access_key = username;  // username IS the access key
   const bucket = 'user-' + username;
-  const prefix = username;
   if (!endpoint) {
     if (errEl) { errEl.textContent = '服务端未配置 MinIO Endpoint，请联系管理员'; errEl.style.display = 'block'; }
+    return;
+  }
+  if (!prefix) {
+    if (errEl) { errEl.textContent = '服务端未配置 MinIO Prefix，请联系管理员设置 HERMES_MINIO_PREFIX 环境变量'; errEl.style.display = 'block'; }
     return;
   }
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
