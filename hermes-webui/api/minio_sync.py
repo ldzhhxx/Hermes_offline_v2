@@ -56,6 +56,8 @@ _REPO_ROOT_CANDIDATES = [
 ]
 
 
+
+
 def _find_minio_sync_script() -> Path | None:
     for root in _REPO_ROOT_CANDIDATES:
         candidate = root / "scripts" / "minio_sync.py"
@@ -66,6 +68,22 @@ def _find_minio_sync_script() -> Path | None:
 
 def _python_executable() -> str:
     return os.environ.get("HERMES_WEBUI_PYTHON") or sys.executable or "python3"
+
+
+def _has_env_credentials() -> bool:
+    """Return True if AK/SK are present in env (operator-provided or login-set)."""
+    return bool(os.environ.get("HERMES_MINIO_ACCESS_KEY") and
+                os.environ.get("HERMES_MINIO_SECRET_KEY"))
+
+
+def _clear_skip_flag() -> None:
+    """Remove the MinIO restore skip flag so the panel reappears."""
+    _startup_restore_skip_flag.clear()
+    try:
+        flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
+        flag.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 # ── Helpers for status payload ────────────────────────────────────────────
@@ -93,6 +111,7 @@ def _public_config() -> dict[str, Any]:
         "sync_interval_seconds": _coerce_int(
             os.environ.get("HERMES_MINIO_SYNC_INTERVAL"), 300
         ),
+        "has_credentials": _has_env_credentials(),
     }
 
 
@@ -289,14 +308,35 @@ def _probe_registration_requirement(cfg: dict[str, Any], configured: bool) -> di
     return result
 
 
-def try_minio_login(endpoint: str, access_key: str, secret_key: str, bucket: str, prefix: str = "", secure: bool = False) -> dict[str, Any]:
-    """Test MinIO credentials and update process env vars on success."""
+def try_minio_login(endpoint: str = "", access_key: str = "", secret_key: str = "",
+                    bucket: str = "", prefix: str = "", secure: bool = False,
+                    login_from_env: bool = False) -> dict[str, Any]:
+    """Test MinIO credentials and update process env vars on success.
+
+    When ``login_from_env=True``, reads all parameters from the current
+    environment variables (operator-provided or previously saved).
+    After a successful connection, credentials are persisted to disk so
+    they survive container restarts.
+    """
+    if login_from_env:
+        endpoint = os.environ.get("HERMES_MINIO_ENDPOINT", "")
+        access_key = os.environ.get("HERMES_MINIO_ACCESS_KEY", "")
+        secret_key = os.environ.get("HERMES_MINIO_SECRET_KEY", "")
+        bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
+        prefix = os.environ.get("HERMES_MINIO_PREFIX", "")
+        secure = os.environ.get("HERMES_MINIO_SECURE", "").lower() == "true"
+        if not endpoint or not access_key or not secret_key or not bucket:
+            return {"ok": False, "error": "环境变量中缺少 MinIO 凭证，无法自动登录"}
     try:
         from minio import Minio
+        import urllib3
     except ImportError:
         return {"ok": False, "error": "minio 库未安装"}
     try:
-        client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+        # Set a 10-second connection+read timeout to avoid hanging indefinitely
+        timeout = urllib3.util.timeout.Timeout(connect=5, read=10)
+        http_client = urllib3.PoolManager(timeout=timeout)
+        client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure, http_client=http_client)
         if not client.bucket_exists(bucket):
             return {"ok": False, "error": f"存储桶 '{bucket}' 不存在"}
     except Exception as exc:
@@ -311,6 +351,8 @@ def try_minio_login(endpoint: str, access_key: str, secret_key: str, bucket: str
     os.environ["HERMES_MINIO_BUCKET"] = bucket
     os.environ["HERMES_MINIO_PREFIX"] = prefix
     os.environ["HERMES_MINIO_SECURE"] = "true" if secure else "false"
+    # Clear skip flag if present
+    _clear_skip_flag()
     # Invalidate credential probe cache
     _credential_probe_cache["result"] = None
     _credential_probe_cache["expires_at"] = 0.0
@@ -448,6 +490,7 @@ def _snapshot_status() -> dict[str, Any]:
             "running": {},
             "last_result": {},
             "quota_exceeded": False,
+            "skip_flag_exists": True,
         }
 
     cfg = _public_config()
@@ -496,6 +539,7 @@ def _snapshot_status() -> dict[str, Any]:
         "running": running,
         "last_result": last,
         "quota_exceeded": quota_exceeded,
+        "skip_flag_exists": False,
     }
 
 

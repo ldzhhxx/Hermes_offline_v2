@@ -2387,14 +2387,27 @@ function _renderMinioGuidance(payload) {
 }
 function _renderMinioUnavailableCard(payload) {
   const registrationRequired = !!(payload && payload.registration_required);
+  const skipFlagExists = !!(payload && payload.skip_flag_exists);
   const url = (payload && payload.register_url) || '';
   const safeUrl = /^https?:\/\//i.test(url) ? url : '';
   const cfg = (payload && payload.config) || {};
+  const hasCreds = !!cfg.has_credentials;
 
   // Secondary registration link (small, below login)
   const registerLink = safeUrl
     ? `<a class="minio-unavail-register" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">还没有账号？申请存储空间 →</a>`
     : '';
+
+  // Scenario 2: skipped restore, all env vars present — quick reconnect
+  const quickLoginBtn = (skipFlagExists && hasCreds)
+    ? `<button class="minio-unavail-login-btn" onclick="_submitMinioLoginFromEnv()" type="button" style="margin-bottom:8px">⚡ 一键恢复连接</button>
+       <div class="minio-unavail-desc" style="font-size:11px;color:var(--muted);margin-bottom:12px">使用已保存的 MinIO 凭证快速连接，无需重新输入</div>`
+    : '';
+
+  // Determine pre-filled bucket hint
+  const bucketHint = (registrationRequired && cfg.bucket)
+    ? `存储桶: ${esc(cfg.bucket)}`
+    : '存储桶: user-<em>&lt;用户名&gt;</em>';
 
   return `
     <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO 同步控制">
@@ -2403,6 +2416,7 @@ function _renderMinioUnavailableCard(payload) {
         <div class="minio-unavail-title">云端同步</div>
         <div class="minio-unavail-desc">登录后可自动同步您的工作区和配置，数据安全存储在 MinIO 中</div>
       </div>
+      ${quickLoginBtn}
       <button class="minio-unavail-login-btn" onclick="_showMinioLoginModal()" type="button">登录 MinIO</button>
       ${registerLink}
     </section>
@@ -2414,7 +2428,7 @@ function _renderMinioUnavailableCard(payload) {
         <label class="minio-login-label">密码<div class="minio-login-pw-wrap"><input id="minioLoginSK" class="minio-login-input minio-login-pw-input" type="password" placeholder="密码"><button type="button" class="minio-login-pw-toggle" onclick="_toggleMinioPwVisibility()" aria-label="显示密码">👁</button></div></label>
         <div class="minio-login-derived">
           <div class="minio-login-derived-row">Endpoint: <strong>${esc(cfg.endpoint || '—')}</strong> (${cfg.secure ? 'HTTPS' : 'HTTP'})</div>
-          <div class="minio-login-derived-row" id="minioLoginBucketHint">存储桶: user-<em>&lt;用户名&gt;</em></div>
+          <div class="minio-login-derived-row" id="minioLoginBucketHint">${bucketHint}</div>
         </div>
         <div class="minio-login-error" id="minioLoginError" style="display:none"></div>
         <div class="minio-login-btns">
@@ -2450,7 +2464,12 @@ function _toggleMinioPwVisibility() {
 function _updateMinioBucketHint() {
   const username = (document.getElementById('minioLoginUsername') || {}).value || '';
   const el = document.getElementById('minioLoginBucketHint');
-  if (el) {
+  if (!el) return;
+  const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
+  if (cfg.bucket) {
+    // Scenario 3: bucket already known, don't override
+    el.textContent = `存储桶: ${cfg.bucket}`;
+  } else {
     el.textContent = username
       ? `存储桶: user-${username}`
       : '存储桶: user-<用户名>';
@@ -2471,7 +2490,9 @@ async function _submitMinioLogin() {
   const secure = !!cfg.secure;
   const prefix = (cfg.prefix || '').trim();
   const access_key = username;  // username IS the access key
-  const bucket = 'user-' + username;
+  // Scenario 3: bucket already set in config (bad AK/SK), use it directly
+  // Scenario 1: no bucket, derive from username
+  const bucket = cfg.bucket || ('user-' + username);
   if (!endpoint) {
     if (errEl) { errEl.textContent = '服务端未配置 MinIO Endpoint，请联系管理员'; errEl.style.display = 'block'; }
     return;
@@ -2483,11 +2504,16 @@ async function _submitMinioLogin() {
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
   if (errEl) errEl.style.display = 'none';
   try {
+    // 15-second timeout: 5s connect + 10s server-side MinIO probe
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
     const resp = await fetch('/api/minio/login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({endpoint, access_key, secret_key, bucket, prefix, secure})
+      body: JSON.stringify({endpoint, access_key, secret_key, bucket, prefix, secure}),
+      signal: controller.signal
     });
+    clearTimeout(timer);
     const data = await resp.json();
     if (data.ok) {
       _hideMinioLoginModal();
@@ -2496,9 +2522,31 @@ async function _submitMinioLogin() {
       if (errEl) { errEl.textContent = data.error || '连接失败'; errEl.style.display = 'block'; }
     }
   } catch (ex) {
-    if (errEl) { errEl.textContent = '请求失败: ' + (ex.message || ex); errEl.style.display = 'block'; }
+    if (ex.name === 'AbortError') {
+      if (errEl) { errEl.textContent = '连接超时（15秒），请检查 MinIO 服务是否可达'; errEl.style.display = 'block'; }
+    } else {
+      if (errEl) { errEl.textContent = '请求失败: ' + (ex.message || ex); errEl.style.display = 'block'; }
+    }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '测试连接并登录'; }
+  }
+}
+async function _submitMinioLoginFromEnv() {
+  /* Scenario 2: quick reconnect using env vars (skip restore → login) */
+  try {
+    const resp = await fetch('/api/minio/login-from-env', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus();
+    } else {
+      alert('自动连接失败: ' + (data.error || '未知错误') + '\n请手动输入用户名和密码登录');
+    }
+  } catch (ex) {
+    alert('请求失败: ' + (ex.message || ex));
   }
 }
 function _renderMinioSkeleton() {

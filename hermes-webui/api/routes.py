@@ -5016,6 +5016,12 @@ def handle_post(handler, parsed) -> bool:
         status = 200 if result.get("ok") else 400
         return j(handler, result, status=status)
 
+    if parsed.path == "/api/minio/login-from-env":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.try_minio_login(login_from_env=True)
+        status = 200 if result.get("ok") else 400
+        return j(handler, result, status=status)
+
     if parsed.path == "/api/minio/purge-and-stop":
         from api import minio_sync as _minio_sync
         result = _minio_sync.purge_and_stop()
