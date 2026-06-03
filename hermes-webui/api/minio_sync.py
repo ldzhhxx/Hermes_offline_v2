@@ -308,25 +308,35 @@ def _probe_registration_requirement(cfg: dict[str, Any], configured: bool) -> di
     return result
 
 
-def try_minio_login(endpoint: str = "", access_key: str = "", secret_key: str = "",
-                    bucket: str = "", prefix: str = "", secure: bool = False,
+def try_minio_login(username: str = "", password: str = "",
                     login_from_env: bool = False) -> dict[str, Any]:
     """Test MinIO credentials and update process env vars on success.
 
-    When ``login_from_env=True``, reads all parameters from the current
-    environment variables (operator-provided or previously saved).
-    After a successful connection, credentials are persisted to disk so
-    they survive container restarts.
+    Two modes:
+    - username+password: reads endpoint/prefix/secure from env, derives
+      bucket as 'user-<username>', uses username as access_key.
+    - login_from_env: reads ALL params from env (for quick reconnect).
     """
+    endpoint = os.environ.get("HERMES_MINIO_ENDPOINT", "")
+    prefix = os.environ.get("HERMES_MINIO_PREFIX", "")
+    secure = os.environ.get("HERMES_MINIO_SECURE", "").lower() == "true"
+
     if login_from_env:
-        endpoint = os.environ.get("HERMES_MINIO_ENDPOINT", "")
         access_key = os.environ.get("HERMES_MINIO_ACCESS_KEY", "")
         secret_key = os.environ.get("HERMES_MINIO_SECRET_KEY", "")
         bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
-        prefix = os.environ.get("HERMES_MINIO_PREFIX", "")
-        secure = os.environ.get("HERMES_MINIO_SECURE", "").lower() == "true"
         if not endpoint or not access_key or not secret_key or not bucket:
             return {"ok": False, "error": "环境变量中缺少 MinIO 凭证，无法自动登录"}
+    else:
+        if not username or not password:
+            return {"ok": False, "error": "用户名和密码为必填项"}
+        if not endpoint:
+            return {"ok": False, "error": "HERMES_MINIO_ENDPOINT 未配置，请联系管理员"}
+        if not prefix:
+            return {"ok": False, "error": "HERMES_MINIO_PREFIX 未配置，请联系管理员"}
+        access_key = username
+        secret_key = password
+        bucket = "user-" + username
     try:
         from minio import Minio
         import urllib3
@@ -884,10 +894,18 @@ def _check_minio_has_data() -> bool:
     immediately — no point scanning a shared bucket without a prefix.
     """
     try:
-        module = _load_minio_sync_module()
-        if module is None or not hasattr(module, "get_client"):
-            return True
-        client = module.get_client()
+        from minio import Minio
+        import urllib3
+        endpoint = os.environ.get("HERMES_MINIO_ENDPOINT", "")
+        access_key = os.environ.get("HERMES_MINIO_ACCESS_KEY", "")
+        secret_key = os.environ.get("HERMES_MINIO_SECRET_KEY", "")
+        secure = os.environ.get("HERMES_MINIO_SECURE", "false").lower() == "true"
+        if not endpoint or not access_key or not secret_key:
+            return False
+        timeout = urllib3.util.timeout.Timeout(connect=5, read=10)
+        http_client = urllib3.PoolManager(timeout=timeout)
+        client = Minio(endpoint, access_key=access_key, secret_key=secret_key,
+                       secure=secure, http_client=http_client)
         bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
         prefix = (os.environ.get("HERMES_MINIO_PREFIX") or "").strip("/")
         if not bucket:

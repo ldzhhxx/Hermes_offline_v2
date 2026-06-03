@@ -5004,15 +5004,11 @@ def handle_post(handler, parsed) -> bool:
     if parsed.path == "/api/minio/login":
         from api import minio_sync as _minio_sync
         body = body or {}
-        endpoint = (body.get("endpoint") or "").strip()
-        access_key = (body.get("access_key") or "").strip()
-        secret_key = (body.get("secret_key") or "").strip()
-        bucket = (body.get("bucket") or "").strip()
-        prefix = (body.get("prefix") or "").strip()
-        secure = bool(body.get("secure", False))
-        if not endpoint or not access_key or not secret_key or not bucket:
-            return bad(handler, "endpoint, access_key, secret_key, bucket 为必填项")
-        result = _minio_sync.try_minio_login(endpoint, access_key, secret_key, bucket, prefix, secure)
+        username = (body.get("username") or body.get("access_key") or "").strip()
+        password = (body.get("password") or body.get("secret_key") or "").strip()
+        if not username or not password:
+            return bad(handler, "username and password are required")
+        result = _minio_sync.try_minio_login(username=username, password=password)
         status = 200 if result.get("ok") else 400
         return j(handler, result, status=status)
 

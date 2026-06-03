@@ -2393,24 +2393,17 @@ function _renderMinioUnavailableCard(payload) {
   const skipFlagExists = !!(payload && payload.skip_flag_exists);
   const url = (payload && payload.register_url) || '';
   const safeUrl = /^https?:\/\//i.test(url) ? url : '';
-  const cfg = (payload && payload.config) || {};
-  const hasCreds = !!cfg.has_credentials;
+  const hasCreds = !!(payload && payload.config && payload.config.has_credentials);
 
-  // Secondary registration link (small, below login)
   const registerLink = safeUrl
     ? `<a class="minio-unavail-register" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">还没有账号？申请存储空间 →</a>`
     : '';
 
-  // Scenario 2: skipped restore — quick reconnect (backend validates creds)
+  // Scenario 2: skipped restore — quick reconnect
   const quickLoginBtn = skipFlagExists
     ? `<button class="minio-unavail-login-btn" id="minioQuickLoginBtn" onclick="_submitMinioLoginFromEnv()" type="button" style="margin-bottom:8px">⚡ 一键恢复连接</button>
        <div class="minio-unavail-desc" style="font-size:11px;color:var(--muted);margin-bottom:12px">使用已保存的 MinIO 凭证快速连接，无需重新输入</div>`
     : '';
-
-  // Determine pre-filled bucket hint
-  const bucketHint = (registrationRequired && cfg.bucket)
-    ? `存储桶: ${esc(cfg.bucket)}`
-    : '存储桶: user-<em>&lt;用户名&gt;</em>';
 
   return `
     <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO 同步控制">
@@ -2430,12 +2423,8 @@ function _renderMinioUnavailableCard(payload) {
         <div class="minio-login-modal-title">登录 MinIO 存储</div>
         <div class="minio-login-hint">用户名为您的邮箱前缀（去掉"."），例如 zhang.san66@byd.com 的用户名为 <strong>zhangsan66</strong></div>
         <div class="minio-login-warn">⚠️ 此登录仅启用<strong>本地 → 云端</strong>的同步功能（自动同步状态、手动上传工作区）。如需从云端恢复文件，请重启 DiAgent 任务并在启动时选择恢复。</div>
-        <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66" oninput="_updateMinioBucketHint()"></label>
+        <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66"></label>
         <label class="minio-login-label">密码<div class="minio-login-pw-wrap"><input id="minioLoginSK" class="minio-login-input minio-login-pw-input" type="password" placeholder="密码"><button type="button" class="minio-login-pw-toggle" onclick="_toggleMinioPwVisibility()" aria-label="显示密码">👁</button></div></label>
-        <div class="minio-login-derived">
-          <div class="minio-login-derived-row">Endpoint: <strong>${esc(cfg.endpoint || '—')}</strong> (${cfg.secure ? 'HTTPS' : 'HTTP'})</div>
-          <div class="minio-login-derived-row" id="minioLoginBucketHint">${bucketHint}</div>
-        </div>
         <div class="minio-login-error" id="minioLoginError" style="display:none"></div>
         <div class="minio-login-btns">
           <button class="minio-login-cancel" onclick="_hideMinioLoginModal()" type="button">取消</button>
@@ -2467,73 +2456,35 @@ function _toggleMinioPwVisibility() {
     if (btn) btn.textContent = '👁';
   }
 }
-function _updateMinioBucketHint() {
-  const username = (document.getElementById('minioLoginUsername') || {}).value || '';
-  const el = document.getElementById('minioLoginBucketHint');
-  if (!el) return;
-  const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
-  if (cfg.bucket) {
-    // Scenario 3: bucket already known, don't override
-    el.textContent = `存储桶: ${cfg.bucket}`;
-  } else {
-    el.textContent = username
-      ? `存储桶: user-${username}`
-      : '存储桶: user-<用户名>';
-  }
-}
 async function _submitMinioLogin() {
   const btn = document.getElementById('minioLoginSubmitBtn');
   const errEl = document.getElementById('minioLoginError');
   const _showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
+  const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
+  const password = (document.getElementById('minioLoginSK') || {}).value.trim();
+  if (!username || !password) { _showErr('用户名和密码为必填项'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
+  if (errEl) errEl.style.display = 'none';
   try {
-    const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
-    const secret_key = (document.getElementById('minioLoginSK') || {}).value.trim();
-    if (!username || !secret_key) {
-      _showErr('用户名和密码为必填项');
-      return;
-    }
-    // Derive everything from username + server config
-    const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
-    const endpoint = cfg.endpoint || '';
-    const secure = !!cfg.secure;
-    const prefix = (cfg.prefix || '').trim();
-    const access_key = username;  // username IS the access key
-    // Scenario 3: bucket already set in config (bad AK/SK), use it directly
-    // Scenario 1: no bucket, derive from username
-    const bucket = cfg.bucket || ('user-' + username);
-    if (!endpoint) {
-      _showErr('服务端未配置 MinIO Endpoint，请联系管理员');
-      return;
-    }
-    if (!prefix) {
-      _showErr('服务端未配置 MinIO Prefix，请联系管理员设置 HERMES_MINIO_PREFIX 环境变量');
-      return;
-    }
-    if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
-    if (errEl) errEl.style.display = 'none';
-    // 15-second timeout: 5s connect + 10s server-side MinIO probe
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
     const resp = await fetch('/api/minio/login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({endpoint, access_key, secret_key, bucket, prefix, secure}),
+      body: JSON.stringify({username, password}),
       signal: controller.signal
     });
     clearTimeout(timer);
     const data = await resp.json();
     if (data.ok) {
       _hideMinioLoginModal();
-      if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus(true);
+      refreshMinioSyncStatus(true);
     } else {
       _showErr(data.error || '连接失败');
     }
   } catch (ex) {
-    if (ex.name === 'AbortError') {
-      _showErr('连接超时（15秒），请检查 MinIO 服务是否可达');
-    } else {
-      _showErr('请求失败: ' + (ex.message || ex));
-    }
+    if (ex.name === 'AbortError') { _showErr('连接超时（15秒），请检查 MinIO 服务是否可达'); }
+    else { _showErr('请求失败: ' + (ex.message || ex)); }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '测试连接并登录'; }
   }
@@ -2957,7 +2908,8 @@ async function triggerMinioFullSync() {
   }
   if (!ok) return;
   const btn = document.getElementById('minioSyncFullBtn');
-  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
+  const btnText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; btn.textContent = '🔄 同步中…'; }
   try {
     const res = await api('/api/minio/sync/workspace', {
       method: 'POST',
@@ -2966,10 +2918,12 @@ async function triggerMinioFullSync() {
     if (res && res.ok) {
       if (typeof showToast === 'function') showToast('全量同步已启动');
       _pollMinioSyncWhileRunning();
-    } else if (typeof showToast === 'function') {
-      showToast(res && res.error ? res.error : '同步失败', 'error');
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = btnText; }
+      if (typeof showToast === 'function') showToast(res && res.error ? res.error : '同步失败', 'error');
     }
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = btnText; }
     if (typeof showToast === 'function') showToast(e.message || '同步失败', 'error');
   } finally {
     if (btn) btn.dataset.busy = '0';
@@ -2984,7 +2938,8 @@ async function triggerMinioUploadSelected() {
     return;
   }
   const btn = document.getElementById('minioSyncUploadBtn');
-  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; }
+  const btnText = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; btn.textContent = '🔄 上传中…'; }
   try {
     const res = await api('/api/minio/sync/workspace', {
       method: 'POST',
@@ -2993,10 +2948,12 @@ async function triggerMinioUploadSelected() {
     if (res && res.ok) {
       if (typeof showToast === 'function') showToast(`正在上传 ${paths.length} 个项目`);
       _pollMinioSyncWhileRunning();
-    } else if (typeof showToast === 'function') {
-      showToast(res && res.error ? res.error : '上传失败', 'error');
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = btnText; }
+      if (typeof showToast === 'function') showToast(res && res.error ? res.error : '上传失败', 'error');
     }
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = btnText; }
     if (typeof showToast === 'function') showToast(e.message || '上传失败', 'error');
   } finally {
     if (btn) btn.dataset.busy = '0';
