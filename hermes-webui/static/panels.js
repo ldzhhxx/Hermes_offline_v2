@@ -6709,48 +6709,39 @@ async function _initMinioStartupRestore() {
     const overlay = document.getElementById('minioRestoreOverlay');
     if (!overlay) return;
 
-    // Check if MinIO is configured by hitting the status API
-    let statusPayload;
+    // Fast path: check restore status first (in-memory + env var, <5ms).
+    // Don't call the slow /api/minio/sync/status here — it blocks 11+ seconds.
+    let restoreStatus;
     try {
-      statusPayload = await api('/api/minio/sync/status');
+      restoreStatus = await api('/api/minio/startup-restore/status');
     } catch (_) { return; }
-
-    if (!statusPayload) return;
-    const cfg = statusPayload.config || {};
-    if (!cfg.enabled || !statusPayload.configured) return;
-
-    // MinIO is enabled — check if restore is needed
-    const restoreStatus = await api('/api/minio/startup-restore/status');
     if (!restoreStatus) return;
 
-    // If already done or skipped, don't show overlay — but still need to
-    // start the daemon if not skipped.
-    if (restoreStatus.status === 'done' || restoreStatus.status === 'skipped'
-        || restoreStatus.status === 'failed') {
-      if (restoreStatus.status === 'done') {
-        // 上次正常完成 — 启动 daemon
-        api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
-      }
-      // skipped / failed — 不启动 daemon，不显示面板
-      if (restoreStatus.status !== 'done') {
-        const mount = document.getElementById('workspaceMinioSyncMount');
-        if (mount) { mount.innerHTML = ''; mount.hidden = true; }
-      }
+    // If MinIO is not enabled/configured, nothing to do
+    if (!restoreStatus.minio_enabled) return;
+
+    // If already done/skipped/failed from a previous session, handle silently
+    if (restoreStatus.status === 'done') {
+      api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+      return;
+    }
+    if (restoreStatus.status === 'skipped' || restoreStatus.status === 'failed') {
+      const mount = document.getElementById('workspaceMinioSyncMount');
+      if (mount) { mount.innerHTML = ''; mount.hidden = true; }
       return;
     }
 
-    // Show the overlay and trigger restore
+    // status === 'idle' → MinIO enabled, restore not yet attempted.
+    // Show overlay IMMEDIATELY, then trigger restore.
     overlay.style.display = 'flex';
     _minioRestoreStartTime = Date.now();
 
-    // Start timer
     _minioRestoreTimer = setInterval(() => {
       const elapsed = Math.floor((Date.now() - _minioRestoreStartTime) / 1000);
       const timerEl = document.getElementById('minioRestoreTimer');
       if (timerEl) timerEl.textContent = `已等待 ${elapsed} 秒`;
     }, 1000);
 
-    // Trigger the restore
     const triggerResult = await api('/api/minio/startup-restore/trigger', {
       method: 'POST', body: JSON.stringify({})
     });
@@ -6760,18 +6751,16 @@ async function _initMinioStartupRestore() {
       return;
     }
 
-    // If restore was already done or not configured, hide immediately
     if (triggerResult.status === 'done' || triggerResult.status === 'skipped'
         || triggerResult.status === 'not_configured') {
       _finishMinioRestoreOverlay(triggerResult.status);
       return;
     }
 
-    // Start polling
     _minioRestorePolling = true;
     _pollMinioRestore();
 
-  } catch (_) { /* tolerated — don't break the page */ }
+  } catch (_) { /* tolerated */ }
 }
 
 async function _pollMinioRestore() {

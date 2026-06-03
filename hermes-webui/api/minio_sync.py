@@ -733,9 +733,19 @@ _startup_restore_skip_flag = threading.Event()
 
 
 def get_startup_restore_status() -> dict[str, Any]:
-    """Return the current startup-restore progress for the frontend."""
+    """Return the current startup-restore progress for the frontend.
+
+    Also includes a fast ``minio_enabled`` check (reads env var, no network)
+    so the frontend can decide whether to show the overlay without calling
+    the slow ``/api/minio/sync/status`` endpoint.
+    """
     with _startup_restore_lock:
-        return dict(_startup_restore_state)
+        state = dict(_startup_restore_state)
+    # Fast check: is MinIO enabled? (env var only, no network call)
+    cfg = _public_config()
+    configured, _ = _config_completeness(cfg)
+    state["minio_enabled"] = bool(cfg.get("enabled") and configured)
+    return state
 
 
 def skip_startup_restore() -> dict[str, Any]:
