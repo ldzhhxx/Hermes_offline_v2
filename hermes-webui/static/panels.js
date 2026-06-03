@@ -2251,6 +2251,7 @@ function _renderSystemHealthPanel() {
 let _minioSyncStatusCache = null;
 // Lazy-loaded usage/quota data — only populated when user clicks "查询用量".
 let _minioUsageCache = null;
+let _minioUsageLoading = false;
 // Per-render selection of workspace entries (paths) for the workspace lane.
 // Default: everything unticked. The plan's safety guidance leans toward "no
 // dangerous hidden scope", so an empty selection blocks submission rather
@@ -2485,6 +2486,22 @@ async function _submitMinioLogin() {
     if (btn) { btn.disabled = false; btn.textContent = '测试连接并登录'; }
   }
 }
+function _renderMinioSkeleton() {
+  // Lightweight skeleton shown while the status API is loading.
+  // Mimics the panel layout so the user sees the card shape immediately.
+  return `
+    <section class="insights-card minio-sync-panel minio-sync-panel--active" aria-label="MinIO 同步控制">
+      <div class="minio-sync-head">
+        <div>
+          <div class="insights-card-title">☁️ 云端同步</div>
+          <div class="minio-sync-sub minio-skeleton-text">正在查询 MinIO 状态...</div>
+        </div>
+        <span class="minio-sync-status"><span class="minio-sync-dot" aria-hidden="true"></span>...</span>
+      </div>
+      <div class="minio-skeleton-bar" style="margin:12px 0"></div>
+      <div class="minio-skeleton-bar" style="width:60%"></div>
+    </section>`;
+}
 function _renderMinioSyncPanel(payload) {
   if (!payload) return '';
   const cfg = payload.config || {};
@@ -2513,24 +2530,26 @@ function _renderMinioSyncPanel(payload) {
   const latestTs = Math.max(lastStateTs || 0, lastWsTs || 0);
   const lastSyncLabel = latestTs ? _formatMinioRelativeTimestamp(latestTs) + '同步' : '';
 
-  // Usage — always visible
+  // Usage — always visible with refresh button
   const usageCache = _minioUsageCache;
   const quota = usageCache ? (Number(usageCache.quota_bytes) || 0) : 0;
   const used = usageCache ? (Number(usageCache.used_bytes) || 0) : 0;
   const usedPct = quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 0;
   const usedClass = usedPct >= 95 ? 'is-critical' : (usedPct >= 80 ? 'is-warn' : '');
+  const usageLoading = !!_minioUsageLoading;
 
   let usageBlock;
   if (!usageCache) {
     usageBlock = `<div class="minio-usage-inline minio-usage-inline--loading">
       <span class="minio-usage-label">存储用量</span>
-      <button type="button" class="minio-usage-load-btn" onclick="triggerMinioFetchUsage()">加载用量</button>
+      <button type="button" class="minio-usage-load-btn" id="minioUsageBtn" onclick="triggerMinioFetchUsage()" ${usageLoading ? 'disabled' : ''}>${usageLoading ? '🔄 查询中...' : '加载用量'}</button>
     </div>`;
   } else if (quota > 0) {
     usageBlock = `<div class="minio-usage-inline">
       <div class="minio-usage-top">
         <span class="minio-usage-label">存储用量</span>
         <span class="minio-usage-value">${esc(_formatMinioBytes(used))} / ${esc(_formatMinioBytes(quota))} (${usedPct}%)</span>
+        <button type="button" class="minio-usage-load-btn" id="minioUsageBtn" onclick="triggerMinioFetchUsage()" ${usageLoading ? 'disabled' : ''}>${usageLoading ? '🔄' : '刷新'}</button>
       </div>
       <div class="minio-sync-quota-bar"><div class="minio-sync-quota-fill ${usedClass}" style="width:${usedPct}%"></div></div>
     </div>`;
@@ -2539,6 +2558,7 @@ function _renderMinioSyncPanel(payload) {
       <div class="minio-usage-top">
         <span class="minio-usage-label">存储用量</span>
         <span class="minio-usage-value">${esc(_formatMinioBytes(used))}</span>
+        <button type="button" class="minio-usage-load-btn" id="minioUsageBtn" onclick="triggerMinioFetchUsage()" ${usageLoading ? 'disabled' : ''}>${usageLoading ? '🔄' : '刷新'}</button>
       </div>
     </div>`;
   }
@@ -2602,7 +2622,6 @@ function _renderMinioSyncPanel(payload) {
         <details class="minio-advanced-section">
           <summary class="minio-advanced-toggle">高级操作</summary>
           <div class="minio-advanced-body">
-            <button type="button" class="minio-sync-btn minio-sync-btn--sm" onclick="triggerMinioFetchUsage()">刷新用量</button>
             <div class="minio-purge-zone">
               <div class="minio-purge-warn">⚠️ 删除 MinIO 中该前缀下的所有对象并停止同步。<strong>此操作不可撤销。</strong></div>
               <button type="button" class="minio-sync-btn minio-sync-btn--danger" id="minioPurgeBtn" onclick="triggerMinioPurgeAndStop()">清除数据并停止同步</button>
@@ -2695,6 +2714,14 @@ async function refreshMinioSyncStatus() {
   // are not silently denied feedback.
   const mount = document.getElementById('workspaceMinioSyncMount');
   if (!mount) return null;
+
+  // Show skeleton immediately if mount is empty (first load / cold start).
+  // This prevents a multi-second blank area when the status API is slow.
+  if (!mount.innerHTML || mount.hidden) {
+    mount.innerHTML = _renderMinioSkeleton();
+    mount.hidden = false;
+  }
+
   try {
     const payload = await api('/api/minio/sync/status');
     _minioSyncStatusCache = payload;
@@ -2732,9 +2759,15 @@ async function refreshMinioSyncStatus() {
     _bindMinioSyncControls();
     return payload;
   } catch (e) {
-    // On a network/HTTP error we keep whatever was last shown; better to
-    // leave the user looking at the previous state than to wipe the panel
-    // and re-show "not configured" while the API is briefly flaky.
+    // On a network/HTTP error, show an error state on the skeleton so the
+    // user knows the API is having trouble, rather than a blank area.
+    if (!mount.querySelector('.minio-sync-panel--active')) {
+      mount.innerHTML = _renderMinioSkeleton().replace(
+        '正在查询 MinIO 状态...',
+        '⚠️ MinIO 状态查询超时，请稍候或刷新页面'
+      );
+      mount.hidden = false;
+    }
     return null;
   }
 }
@@ -2844,20 +2877,20 @@ async function triggerMinioUploadSelected() {
   }
 }
 async function triggerMinioFetchUsage() {
-  const btn = document.getElementById('minioUsageBtn');
-  if (btn) btn.disabled = true;
+  _minioUsageLoading = true;
+  refreshMinioSyncStatus(); // re-render to show loading state on button
   try {
     const res = await api('/api/minio/sync/usage');
     if (res && res.ok) {
       _minioUsageCache = res;
-      refreshMinioSyncStatus();
     } else {
       if (typeof showToast === 'function') showToast((res && res.error) || '查询用量失败', 'error');
     }
   } catch (e) {
     if (typeof showToast === 'function') showToast(e.message || '查询用量失败', 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    _minioUsageLoading = false;
+    refreshMinioSyncStatus();
   }
 }
 async function triggerMinioBrowseRemote() {

@@ -84,6 +84,12 @@
 .minio-restore-hint{font-size:11px;color:#5f6368;line-height:1.5;max-width:320px;margin:0 auto;}
 .minio-restore-overlay.is-done .minio-restore-progress-fill{width:100%;background:linear-gradient(90deg,#34a853,#0f9d58);animation:none;}
 .minio-restore-overlay.is-done .minio-restore-icon{animation:none;}
+.minio-skeleton-text{color:#5f6368;animation:minio-skeleton-pulse 1.5s ease-in-out infinite;}
+.minio-skeleton-bar{height:8px;border-radius:4px;background:rgba(255,255,255,.06);animation:minio-skeleton-pulse 1.5s ease-in-out infinite;}
+@keyframes minio-skeleton-pulse{0%,100%{opacity:.4}50%{opacity:.8}}
+.minio-usage-load-btn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:var(--muted,#9aa0a6);border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;transition:all .15s ease;white-space:nowrap;}
+.minio-usage-load-btn:hover{background:rgba(255,255,255,.08);color:var(--text,#e8eaed);}
+.minio-usage-load-btn:disabled{opacity:.5;cursor:not-allowed;}
 </style>
 <div id="minioRestoreOverlay" class="minio-restore-overlay" style="display:none">
   <div class="minio-restore-card">
