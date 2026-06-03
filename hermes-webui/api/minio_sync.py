@@ -432,6 +432,24 @@ def _snapshot_status() -> dict[str, Any]:
     separate ``get_usage()`` entry point so they are only computed when the
     user explicitly clicks "查询用量" in the UI.
     """
+    # If the user skipped MinIO restore, pretend MinIO doesn't exist.
+    # This prevents the workspace panel from showing any MinIO controls.
+    if is_minio_skipped():
+        return {
+            "config": _public_config(),
+            "configured": False,
+            "registration_required": False,
+            "registration_state": None,
+            "unavailable_reason": "用户已跳过 MinIO 恢复，当前使用本地数据",
+            "register_url": "",
+            "workspace_entries": [],
+            "blocked_extensions": [],
+            "script_available": False,
+            "running": {},
+            "last_result": {},
+            "quota_exceeded": False,
+        }
+
     cfg = _public_config()
     configured, unavailable_reason = _config_completeness(cfg)
     register_url = _register_url()
@@ -883,3 +901,77 @@ def _run_startup_restore():
             _startup_restore_state["phase"] = f"恢复异常: {exc}"
             _startup_restore_state["finished_at"] = time.time()
             _startup_restore_state["error"] = str(exc)
+
+
+# ── Daemon Lifecycle (WebUI-managed) ────────────────────────────────────────
+#
+# The MinIO sync daemon is no longer started by start.sh. Instead, it is
+# started here after restore completes (or immediately if no restore was
+# needed).  When the user skips restore, the daemon is never started, so
+# no MinIO network activity occurs for the rest of the container's life.
+
+_daemon_process: subprocess.Popen | None = None
+_daemon_lock = threading.Lock()
+
+
+def is_minio_skipped() -> bool:
+    """Return True if the user has skipped MinIO for this session."""
+    if _startup_restore_skip_flag.is_set():
+        return True
+    try:
+        flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
+        return flag.exists()
+    except Exception:
+        return False
+
+
+def start_daemon_if_safe() -> dict[str, Any]:
+    """Start the MinIO sync daemon — but only if restore was NOT skipped.
+
+    Called from the WebUI after restore completes, or from the status check
+    when no restore was needed (data already local from a previous session).
+    """
+    global _daemon_process
+
+    if is_minio_skipped():
+        return {"ok": False, "error": "MinIO 已跳过，不启动 daemon"}
+
+    with _daemon_lock:
+        if _daemon_process is not None and _daemon_process.poll() is None:
+            return {"ok": True, "message": "daemon 已在运行"}
+
+    cfg = _public_config()
+    configured, reason = _config_completeness(cfg)
+    if not configured:
+        return {"ok": False, "error": reason or "MinIO 未配置"}
+
+    script = _find_minio_sync_script()
+    if script is None:
+        return {"ok": False, "error": "minio_sync.py 未找到"}
+
+    try:
+        python = _python_executable()
+        proc = subprocess.Popen(
+            [python, str(script), "daemon"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        with _daemon_lock:
+            _daemon_process = proc
+        logger.info("MinIO sync daemon started (pid=%s)", proc.pid)
+        return {"ok": True, "pid": proc.pid}
+    except Exception as exc:
+        logger.error("Failed to start MinIO daemon: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+
+def get_daemon_status() -> dict[str, Any]:
+    """Return whether the MinIO sync daemon is running."""
+    with _daemon_lock:
+        if _daemon_process is not None:
+            rc = _daemon_process.poll()
+            if rc is None:
+                return {"running": True, "pid": _daemon_process.pid}
+            else:
+                return {"running": False, "exit_code": rc}
+    return {"running": False}

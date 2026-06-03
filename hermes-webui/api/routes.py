@@ -4991,6 +4991,16 @@ def handle_post(handler, parsed) -> bool:
         result = _minio_sync.skip_startup_restore()
         return j(handler, result)
 
+    if parsed.path == "/api/minio/daemon/start":
+        from api import minio_sync as _minio_sync
+        result = _minio_sync.start_daemon_if_safe()
+        status = 200 if result.get("ok") else 409
+        return j(handler, result, status=status)
+
+    if parsed.path == "/api/minio/daemon/status":
+        from api import minio_sync as _minio_sync
+        return j(handler, _minio_sync.get_daemon_status())
+
     if parsed.path == "/api/minio/login":
         from api import minio_sync as _minio_sync
         body = body or {}

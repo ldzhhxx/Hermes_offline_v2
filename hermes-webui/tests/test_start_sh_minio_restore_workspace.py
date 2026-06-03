@@ -17,10 +17,16 @@ def test_start_sh_does_not_block_on_minio_restore():
     )
 
 
-def test_start_sh_still_starts_minio_daemon():
-    """start.sh must still start the periodic MinIO sync daemon."""
-    assert 'minio_sync.py daemon' in START_SH, (
-        'start.sh must still start the MinIO sync daemon for periodic state sync.'
+def test_start_sh_does_not_start_minio_daemon():
+    """start.sh must NOT start the MinIO sync daemon directly.
+
+    The daemon is now started by the WebUI after restore completes (or
+    immediately if no restore was needed).  This prevents the daemon from
+    syncing empty data when the user skips restore.
+    """
+    assert 'minio_sync.py daemon' not in START_SH, (
+        'start.sh must not start the MinIO daemon. '
+        'The daemon is now managed by the WebUI via /api/minio/daemon/start.'
     )
 
 

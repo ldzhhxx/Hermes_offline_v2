@@ -6676,8 +6676,15 @@ async function _initMinioStartupRestore() {
     const restoreStatus = await api('/api/minio/startup-restore/status');
     if (!restoreStatus) return;
 
-    // If already done or skipped, don't show overlay
-    if (restoreStatus.status === 'done' || restoreStatus.status === 'skipped') return;
+    // If already done or skipped, don't show overlay — but still need to
+    // start the daemon if not skipped.
+    if (restoreStatus.status === 'done' || restoreStatus.status === 'skipped') {
+      if (restoreStatus.status === 'done') {
+        // Previous session completed restore — just start daemon
+        api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+      }
+      return;
+    }
 
     // Show the overlay and trigger restore
     overlay.style.display = 'flex';
@@ -6757,18 +6764,38 @@ function _finishMinioRestoreOverlay(status) {
   if (status === 'done') {
     overlay.classList.add('is-done');
     const phaseEl = document.getElementById('minioRestorePhase');
-    if (phaseEl) phaseEl.textContent = '✅ 恢复完成，正在加载...';
+    if (phaseEl) phaseEl.textContent = '✅ 恢复完成，正在启动同步服务...';
     const fillEl = document.getElementById('minioRestoreProgressFill');
     if (fillEl) fillEl.style.width = '100%';
-    // Hide after a brief celebration
-    setTimeout(() => { _hideMinioRestoreOverlay(); }, 1200);
+    // Start the sync daemon, then hide overlay and refresh the MinIO panel
+    api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) })
+      .then(() => {
+        setTimeout(() => {
+          _hideMinioRestoreOverlay();
+          // Refresh the MinIO panel so it shows the active sync state
+          if (typeof mountWorkspaceMinioSync === 'function') mountWorkspaceMinioSync();
+        }, 1000);
+      })
+      .catch(() => {
+        setTimeout(() => { _hideMinioRestoreOverlay(); }, 1000);
+      });
   } else if (status === 'failed') {
     const phaseEl = document.getElementById('minioRestorePhase');
     if (phaseEl) phaseEl.textContent = '⚠️ 恢复失败，将使用本地数据';
-    setTimeout(() => { _hideMinioRestoreOverlay(); }, 2000);
+    // Still try to start daemon (local data exists, daemon can sync state)
+    api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+    setTimeout(() => {
+      _hideMinioRestoreOverlay();
+      if (typeof mountWorkspaceMinioSync === 'function') mountWorkspaceMinioSync();
+    }, 2000);
   } else {
-    // skipped
+    // skipped — NO daemon, NO MinIO panel. _snapshot_status now returns
+    // configured=false when skipped, so mountWorkspaceMinioSync will render
+    // the "unavailable" card. We hide the mount entirely to avoid showing
+    // a confusing "login" button when the user intentionally skipped.
     _hideMinioRestoreOverlay();
+    const mount = document.getElementById('workspaceMinioSyncMount');
+    if (mount) { mount.innerHTML = ''; mount.hidden = true; }
   }
 }
 
