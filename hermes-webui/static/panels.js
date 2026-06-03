@@ -2417,7 +2417,9 @@ function _renderMinioUnavailableCard(payload) {
         <div class="minio-unavail-desc">登录后可自动同步您的工作区和配置，数据安全存储在 MinIO 中</div>
       </div>
       ${quickLoginBtn}
-      <button class="minio-unavail-login-btn" onclick="_showMinioLoginModal()" type="button">登录 MinIO</button>
+      ${quickLoginBtn
+        ? '<div style="font-size:11px;color:var(--muted);margin-top:4px"><a href="#" onclick="_showMinioLoginModal();return false" style="color:var(--accent);text-decoration:underline;text-underline-offset:2px">手动输入用户名密码登录</a></div>'
+        : '<button class="minio-unavail-login-btn" onclick="_showMinioLoginModal()" type="button">登录 MinIO</button>'}
       ${registerLink}
     </section>
     <div class="minio-login-modal-overlay" id="minioLoginOverlay" style="display:none" onclick="_hideMinioLoginModal(event)">
