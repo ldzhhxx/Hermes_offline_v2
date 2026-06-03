@@ -2581,9 +2581,11 @@ function _renderMinioSyncPanel(payload) {
   // State sync — compact, automatic, not prominent
   const stateLastTs = lastStateTs ? _formatMinioRelativeTimestamp(lastStateTs) : '';
   const stateResultBlock = (last.state && !last.state.ok) ? _renderMinioSyncResult('state', last.state) : '';
+  const syncInterval = Number(cfg.sync_interval_seconds) || 300;
+  const stateTip = `每 ${Math.round(syncInterval / 60)} 分钟自动同步一次，同步内容包括：\n• 会话记录（聊天历史）\n• 技能文件（Skills）\n• 状态数据库（state.db）\n• 日志文件\n\n不同步：配置文件、密码、WebUI 设置\n工作区文件需手动同步`;
   const stateLine = stateRunning
-    ? `<span class="minio-state-status minio-state-status--busy">🔄 状态同步中…</span>`
-    : `<span class="minio-state-status">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
+    ? `<span class="minio-state-status minio-state-status--busy" title="${esc(stateTip)}">🔄 状态同步中…</span>`
+    : `<span class="minio-state-status has-tooltip has-tooltip--bottom" title="${esc(stateTip)}">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
        <button type="button" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
 
   // Workspace entries
