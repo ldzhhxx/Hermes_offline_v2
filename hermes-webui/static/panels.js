@@ -2636,7 +2636,7 @@ function _renderMinioSyncPanel(payload) {
     ? `<span class="minio-state-status minio-state-status--busy" title="${esc(stateTip)}">🔄 状态同步中…</span>`
     : `<span class="minio-state-status">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
        <span class="minio-sync-info-trigger has-tooltip has-tooltip--bottom" title="${esc(stateTip)}" aria-label="同步详情">ⓘ</span>
-       <button type="button" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
+       <button type="button" id="minioSyncStateBtn" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
 
   // Workspace entries
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
@@ -2883,20 +2883,22 @@ function _pollMinioSyncWhileRunning() {
 }
 async function triggerMinioStateSync() {
   const btn = document.getElementById('minioSyncStateBtn');
-  if (btn) btn.disabled = true;
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 同步中…'; }
   try {
     const res = await api('/api/minio/sync/state', {method:'POST', body: JSON.stringify({})});
     if (res && res.ok) {
       if (typeof showToast === 'function') showToast('状态同步已启动');
       _pollMinioSyncWhileRunning();
-    } else if (typeof showToast === 'function') {
-      showToast(res && res.error ? res.error : '同步失败', 'error');
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '立即同步'; }
+      if (typeof showToast === 'function') showToast(res && res.error ? res.error : '同步失败', 'error');
     }
   } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '立即同步'; }
     if (typeof showToast === 'function') showToast(e.message || '同步失败', 'error');
-  } finally {
-    refreshMinioSyncStatus();
   }
+  // Don't restore button in finally — let refreshMinioSyncStatus handle it
+  // (running state will show "🔄 状态同步中…" instead of the button)
 }
 async function triggerMinioFullSync() {
   // Full workspace sync: mirror mode + cleanup_remote, no path selection
