@@ -2424,6 +2424,7 @@ function _renderMinioUnavailableCard(payload) {
       <div class="minio-login-modal" onclick="event.stopPropagation()">
         <div class="minio-login-modal-title">登录 MinIO 存储</div>
         <div class="minio-login-hint">用户名为您的邮箱前缀（去掉"."），例如 zhang.san66@byd.com 的用户名为 <strong>zhangsan66</strong></div>
+        <div class="minio-login-warn">⚠️ 此登录仅启用<strong>本地 → 云端</strong>的同步功能（自动同步状态、手动上传工作区）。如需从云端恢复文件，请重启 DiAgent 任务并在启动时选择恢复。</div>
         <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66" oninput="_updateMinioBucketHint()"></label>
         <label class="minio-login-label">密码<div class="minio-login-pw-wrap"><input id="minioLoginSK" class="minio-login-input minio-login-pw-input" type="password" placeholder="密码"><button type="button" class="minio-login-pw-toggle" onclick="_toggleMinioPwVisibility()" aria-label="显示密码">👁</button></div></label>
         <div class="minio-login-derived">

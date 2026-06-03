@@ -414,6 +414,8 @@
   .minio-login-input:focus{border-color:var(--accent);}
   .minio-login-checkbox{flex-direction:row;align-items:center;gap:6px;}
   .minio-login-hint{font-size:11px;color:var(--text-secondary);line-height:1.4;}
+  .minio-login-warn{font-size:11px;color:#b45309;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.3);border-radius:6px;padding:6px 10px;line-height:1.5;margin-top:2px;}
+  .minio-login-warn strong{color:#92400e;}
   .minio-login-derived{font-size:11px;color:var(--text-secondary);background:var(--surface);border-radius:6px;padding:8px 10px;display:flex;flex-direction:column;gap:4px;}
   .minio-login-derived-row strong{color:var(--text);}
   .minio-login-error{font-size:12px;color:var(--danger,#e53e3e);padding:4px 0;}
