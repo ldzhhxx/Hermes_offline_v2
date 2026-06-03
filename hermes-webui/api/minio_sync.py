@@ -905,6 +905,45 @@ def _check_minio_has_data() -> bool:
         return True
 
 
+def _validate_minio_credentials() -> tuple[bool, str]:
+    """Validate MinIO connectivity before restore.
+
+    Returns (ok, error_message). Checks endpoint reachability and AK/SK validity.
+    """
+    try:
+        from minio import Minio
+        import urllib3
+    except ImportError:
+        return False, "minio 库未安装"
+
+    endpoint = os.environ.get("HERMES_MINIO_ENDPOINT", "")
+    access_key = os.environ.get("HERMES_MINIO_ACCESS_KEY", "")
+    secret_key = os.environ.get("HERMES_MINIO_SECRET_KEY", "")
+    bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
+    secure = os.environ.get("HERMES_MINIO_SECURE", "false").lower() == "true"
+
+    if not endpoint:
+        return False, "HERMES_MINIO_ENDPOINT 未配置"
+    if not access_key or not secret_key:
+        return False, "MinIO AK/SK 未配置"
+    if not bucket:
+        return False, "HERMES_MINIO_BUCKET 未配置"
+
+    try:
+        timeout = urllib3.util.timeout.Timeout(connect=5, read=10)
+        http_client = urllib3.PoolManager(timeout=timeout)
+        client = Minio(endpoint, access_key=access_key, secret_key=secret_key,
+                       secure=secure, http_client=http_client)
+        # Lightweight auth check
+        client.bucket_exists(bucket)
+        return True, ""
+    except Exception as exc:
+        err = str(exc)
+        if _looks_like_invalid_minio_credentials(exc):
+            return False, "MinIO AK/SK 无效，请检查凭证"
+        return False, f"MinIO 连接失败: {err}"
+
+
 def _run_startup_restore():
     """Background worker: run the actual MinIO restore."""
     try:
@@ -915,6 +954,19 @@ def _run_startup_restore():
                 _startup_restore_state["phase"] = "minio_sync.py 脚本未找到"
                 _startup_restore_state["finished_at"] = time.time()
                 _startup_restore_state["error"] = "minio_sync.py not found"
+            return
+
+        # Validate credentials before attempting restore
+        with _startup_restore_lock:
+            _startup_restore_state["phase"] = "正在验证 MinIO 凭证..."
+        creds_ok, creds_err = _validate_minio_credentials()
+        if not creds_ok:
+            logger.warning("MinIO credential validation failed: %s", creds_err)
+            with _startup_restore_lock:
+                _startup_restore_state["status"] = "failed"
+                _startup_restore_state["phase"] = creds_err
+                _startup_restore_state["finished_at"] = time.time()
+                _startup_restore_state["error"] = creds_err
             return
 
         # Quick pre-check: does the bucket/prefix have any objects?

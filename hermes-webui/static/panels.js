@@ -2398,8 +2398,8 @@ function _renderMinioUnavailableCard(payload) {
     ? `<a class="minio-unavail-register" href="${esc(safeUrl)}" target="_blank" rel="noopener noreferrer">还没有账号？申请存储空间 →</a>`
     : '';
 
-  // Scenario 2: skipped restore, all env vars present — quick reconnect
-  const quickLoginBtn = (skipFlagExists && hasCreds)
+  // Scenario 2: skipped restore — quick reconnect (backend validates creds)
+  const quickLoginBtn = skipFlagExists
     ? `<button class="minio-unavail-login-btn" id="minioQuickLoginBtn" onclick="_submitMinioLoginFromEnv()" type="button" style="margin-bottom:8px">⚡ 一键恢复连接</button>
        <div class="minio-unavail-desc" style="font-size:11px;color:var(--muted);margin-bottom:12px">使用已保存的 MinIO 凭证快速连接，无需重新输入</div>`
     : '';
