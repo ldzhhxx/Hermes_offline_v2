@@ -2801,77 +2801,99 @@ function _refreshMinioWsSummary() {
   }
 }
 async function refreshMinioSyncStatus(force) {
-  // The MinIO panel always renders into the workspace right-side mount.
-  // We render even when MinIO is not configured (the mount surfaces the
-  // unavailable state + registration link there) so users without storage
-  // are not silently denied feedback.
   const mount = document.getElementById('workspaceMinioSyncMount');
   if (!mount) return null;
 
-  // Client-side cache: skip API call if we fetched recently (unless forced)
-  const now = Date.now();
-  if (!force && _minioSyncStatusCache && (now - _minioSyncStatusFetchedAt) < _MINIO_STATUS_CACHE_TTL) {
-    return _minioSyncStatusCache;
-  }
-
-  // Dedup: if a request is already in flight, wait for it instead of starting another
+  // Dedup: if a request is already in flight, wait for it
   if (_minioStatusInFlight) {
     try { return await _minioStatusInFlight; } catch(_) { return null; }
   }
 
-  // Show skeleton immediately if mount is empty (first load / cold start).
-  // This prevents a multi-second blank area when the status API is slow.
+  // Client-side cache: skip API call if we fetched recently (unless forced)
+  const now = Date.now();
+  const cached = _minioSyncStatusCache;
+  const cacheFresh = cached && (now - _minioSyncStatusFetchedAt) < _MINIO_STATUS_CACHE_TTL;
+
+  // ★ KEY FIX: If not configured AND we have no cache, render login card
+  // directly WITHOUT calling the slow status API. This prevents the login
+  // button from disappearing during the 11-second API call.
+  if (!force && !cached) {
+    // No cache at all — check if we can skip the API entirely
+    // by rendering a minimal "not configured" card. The login modal
+    // provides all the config it needs from env vars on the backend.
+    // We'll fetch status only AFTER login succeeds.
+    mount.innerHTML = _renderMinioUnavailableCard({
+      config: { endpoint: '', bucket: '', prefix: '', secure: false },
+      configured: false,
+      registration_required: false,
+      skip_flag_exists: false,
+      register_url: ''
+    });
+    mount.hidden = false;
+    _bindMinioSyncControls();
+    // Still fetch in background so we have data for next time
+    _minioStatusInFlight = _doFetchStatus(mount, true);
+    try { return await _minioStatusInFlight; } finally { _minioStatusInFlight = null; }
+  }
+
+  if (!force && cacheFresh) {
+    return cached;
+  }
+
+  // Show skeleton if mount is empty
   if (!mount.innerHTML || mount.hidden) {
     mount.innerHTML = _renderMinioSkeleton();
     mount.hidden = false;
   }
 
-  const _doFetch = async () => {
-    try {
-      const _t0 = Date.now();
-      const payload = await api('/api/minio/sync/status');
-      _minioSyncLatencyMs = Date.now() - _t0;
-      _minioSyncStatusCache = payload;
-      _minioSyncStatusFetchedAt = Date.now();
-      const html = _renderMinioSyncPanel(payload);
-      if (!html) {
-        mount.innerHTML = '';
-        mount.hidden = true;
-        return payload;
-      }
-      const prevDetails = mount.querySelector('#minioSyncDetails');
-      const wasOpen = prevDetails ? prevDetails.open : false;
-      const remoteEl = mount.querySelector('#minioRemoteFiles');
-      const remoteWasVisible = remoteEl ? !remoteEl.hidden : false;
-      const remoteHtml = remoteWasVisible && remoteEl ? remoteEl.innerHTML : '';
-      mount.innerHTML = html;
-      mount.hidden = false;
-      if (wasOpen) {
-        const det = mount.querySelector('#minioSyncDetails');
-        if (det) det.open = true;
-      }
-      if (remoteWasVisible) {
-        const rf = mount.querySelector('#minioRemoteFiles');
-        if (rf) { rf.hidden = false; rf.innerHTML = remoteHtml; }
-      }
-      _bindMinioSyncControls();
-      return payload;
-    } catch (e) {
-      if (!mount.querySelector('.minio-sync-panel--active')) {
-        mount.innerHTML = _renderMinioSkeleton().replace(
-          '正在查询 MinIO 状态...',
-          '⚠️ MinIO 状态查询超时，请稍候或刷新页面'
-        );
-        mount.hidden = false;
-      }
-      return null;
-    }
-  };
-  _minioStatusInFlight = _doFetch();
+  _minioStatusInFlight = _doFetchStatus(mount, false);
   try {
     return await _minioStatusInFlight;
   } finally {
     _minioStatusInFlight = null;
+  }
+}
+
+async function _doFetchStatus(mount, isBackground) {
+  try {
+    const _t0 = Date.now();
+    const payload = await api('/api/minio/sync/status');
+    _minioSyncLatencyMs = Date.now() - _t0;
+    _minioSyncStatusCache = payload;
+    _minioSyncStatusFetchedAt = Date.now();
+    // Don't overwrite the mount if it was already rendered by a faster path
+    // (e.g. login card was shown immediately, then background fetch completed)
+    const html = _renderMinioSyncPanel(payload);
+    if (!html) {
+      if (!isBackground) { mount.innerHTML = ''; mount.hidden = true; }
+      return payload;
+    }
+    const prevDetails = mount.querySelector('#minioSyncDetails');
+    const wasOpen = prevDetails ? prevDetails.open : false;
+    const remoteEl = mount.querySelector('#minioRemoteFiles');
+    const remoteWasVisible = remoteEl ? !remoteEl.hidden : false;
+    const remoteHtml = remoteWasVisible && remoteEl ? remoteEl.innerHTML : '';
+    mount.innerHTML = html;
+    mount.hidden = false;
+    if (wasOpen) {
+      const det = mount.querySelector('#minioSyncDetails');
+      if (det) det.open = true;
+    }
+    if (remoteWasVisible) {
+      const rf = mount.querySelector('#minioRemoteFiles');
+      if (rf) { rf.hidden = false; rf.innerHTML = remoteHtml; }
+    }
+    _bindMinioSyncControls();
+    return payload;
+  } catch (e) {
+    if (!isBackground && !mount.querySelector('.minio-sync-panel--active')) {
+      mount.innerHTML = _renderMinioSkeleton().replace(
+        '正在查询 MinIO 状态...',
+        '⚠️ MinIO 状态查询超时，请稍候或刷新页面'
+      );
+      mount.hidden = false;
+    }
+    return null;
   }
 }
 
