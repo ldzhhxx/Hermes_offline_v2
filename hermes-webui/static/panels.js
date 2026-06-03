@@ -2400,7 +2400,7 @@ function _renderMinioUnavailableCard(payload) {
 
   // Scenario 2: skipped restore, all env vars present — quick reconnect
   const quickLoginBtn = (skipFlagExists && hasCreds)
-    ? `<button class="minio-unavail-login-btn" onclick="_submitMinioLoginFromEnv()" type="button" style="margin-bottom:8px">⚡ 一键恢复连接</button>
+    ? `<button class="minio-unavail-login-btn" id="minioQuickLoginBtn" onclick="_submitMinioLoginFromEnv()" type="button" style="margin-bottom:8px">⚡ 一键恢复连接</button>
        <div class="minio-unavail-desc" style="font-size:11px;color:var(--muted);margin-bottom:12px">使用已保存的 MinIO 凭证快速连接，无需重新输入</div>`
     : '';
 
@@ -2479,32 +2479,33 @@ function _updateMinioBucketHint() {
 async function _submitMinioLogin() {
   const btn = document.getElementById('minioLoginSubmitBtn');
   const errEl = document.getElementById('minioLoginError');
-  const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
-  const secret_key = (document.getElementById('minioLoginSK') || {}).value.trim();
-  if (!username || !secret_key) {
-    if (errEl) { errEl.textContent = '用户名和密码为必填项'; errEl.style.display = 'block'; }
-    return;
-  }
-  // Derive everything from username + server config
-  const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
-  const endpoint = cfg.endpoint || '';
-  const secure = !!cfg.secure;
-  const prefix = (cfg.prefix || '').trim();
-  const access_key = username;  // username IS the access key
-  // Scenario 3: bucket already set in config (bad AK/SK), use it directly
-  // Scenario 1: no bucket, derive from username
-  const bucket = cfg.bucket || ('user-' + username);
-  if (!endpoint) {
-    if (errEl) { errEl.textContent = '服务端未配置 MinIO Endpoint，请联系管理员'; errEl.style.display = 'block'; }
-    return;
-  }
-  if (!prefix) {
-    if (errEl) { errEl.textContent = '服务端未配置 MinIO Prefix，请联系管理员设置 HERMES_MINIO_PREFIX 环境变量'; errEl.style.display = 'block'; }
-    return;
-  }
-  if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
-  if (errEl) errEl.style.display = 'none';
+  const _showErr = (msg) => { if (errEl) { errEl.textContent = msg; errEl.style.display = 'block'; } };
   try {
+    const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
+    const secret_key = (document.getElementById('minioLoginSK') || {}).value.trim();
+    if (!username || !secret_key) {
+      _showErr('用户名和密码为必填项');
+      return;
+    }
+    // Derive everything from username + server config
+    const cfg = (_minioSyncStatusCache && _minioSyncStatusCache.config) || {};
+    const endpoint = cfg.endpoint || '';
+    const secure = !!cfg.secure;
+    const prefix = (cfg.prefix || '').trim();
+    const access_key = username;  // username IS the access key
+    // Scenario 3: bucket already set in config (bad AK/SK), use it directly
+    // Scenario 1: no bucket, derive from username
+    const bucket = cfg.bucket || ('user-' + username);
+    if (!endpoint) {
+      _showErr('服务端未配置 MinIO Endpoint，请联系管理员');
+      return;
+    }
+    if (!prefix) {
+      _showErr('服务端未配置 MinIO Prefix，请联系管理员设置 HERMES_MINIO_PREFIX 环境变量');
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
+    if (errEl) errEl.style.display = 'none';
     // 15-second timeout: 5s connect + 10s server-side MinIO probe
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15000);
@@ -2520,13 +2521,13 @@ async function _submitMinioLogin() {
       _hideMinioLoginModal();
       if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus();
     } else {
-      if (errEl) { errEl.textContent = data.error || '连接失败'; errEl.style.display = 'block'; }
+      _showErr(data.error || '连接失败');
     }
   } catch (ex) {
     if (ex.name === 'AbortError') {
-      if (errEl) { errEl.textContent = '连接超时（15秒），请检查 MinIO 服务是否可达'; errEl.style.display = 'block'; }
+      _showErr('连接超时（15秒），请检查 MinIO 服务是否可达');
     } else {
-      if (errEl) { errEl.textContent = '请求失败: ' + (ex.message || ex); errEl.style.display = 'block'; }
+      _showErr('请求失败: ' + (ex.message || ex));
     }
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '测试连接并登录'; }
@@ -2534,6 +2535,8 @@ async function _submitMinioLogin() {
 }
 async function _submitMinioLoginFromEnv() {
   /* Scenario 2: quick reconnect using env vars (skip restore → login) */
+  const btn = document.getElementById('minioQuickLoginBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '🔄 连接中…'; }
   try {
     const resp = await fetch('/api/minio/login-from-env', {
       method: 'POST',
@@ -2544,9 +2547,11 @@ async function _submitMinioLoginFromEnv() {
     if (data.ok) {
       if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus();
     } else {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ 一键恢复连接'; }
       alert('自动连接失败: ' + (data.error || '未知错误') + '\n请手动输入用户名和密码登录');
     }
   } catch (ex) {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ 一键恢复连接'; }
     alert('请求失败: ' + (ex.message || ex));
   }
 }
