@@ -335,6 +335,8 @@
   .minio-state-status--busy{color:var(--accent);}
   .minio-state-sync-link{background:none;border:none;color:var(--accent);font-size:11px;font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:2px;}
   .minio-state-sync-link:hover{color:var(--accent-hover,var(--accent));}
+  .minio-sync-info-trigger{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;font-size:12px;line-height:1;color:var(--muted);background:var(--surface-alt,rgba(128,128,128,.08));cursor:help;user-select:none;transition:color .15s,background .15s;}
+  .minio-sync-info-trigger:hover{color:var(--accent);background:var(--accent-bg,rgba(66,133,244,.1));}
   /* Workspace section */
   .minio-workspace-section{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);}
   .minio-workspace-header{display:flex;align-items:center;gap:8px;}
