@@ -822,6 +822,32 @@ def clear_startup_restore_skip() -> dict[str, Any]:
     return {"ok": True}
 
 
+def _check_minio_has_data() -> bool:
+    """Quick check: does the MinIO bucket/prefix have any objects?
+
+    Returns True if there's at least one object, False if empty.
+    Uses the minio Python SDK directly (lightweight list call).
+    """
+    try:
+        module = _load_minio_sync_module()
+        if module is None or not hasattr(module, "get_client"):
+            # Can't check — assume there's data to be safe
+            return True
+        client = module.get_client()
+        bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
+        prefix = (os.environ.get("HERMES_MINIO_PREFIX") or "").strip("/")
+        if not bucket:
+            return False
+        # List just one object to check existence
+        objects = client.list_objects(bucket, prefix=prefix + "/" if prefix else "", recursive=True)
+        for _ in objects:
+            return True  # found at least one object
+        return False  # empty
+    except Exception as exc:
+        logger.debug("_check_minio_has_data failed: %s — assuming data exists", exc)
+        return True  # on error, assume data exists so we try the full restore
+
+
 def _run_startup_restore():
     """Background worker: run the actual MinIO restore."""
     try:
@@ -832,6 +858,33 @@ def _run_startup_restore():
                 _startup_restore_state["phase"] = "minio_sync.py 脚本未找到"
                 _startup_restore_state["finished_at"] = time.time()
                 _startup_restore_state["error"] = "minio_sync.py not found"
+            return
+
+        # Quick pre-check: does the bucket/prefix have any objects?
+        # If empty (first-time user), skip the heavy restore entirely.
+        with _startup_restore_lock:
+            _startup_restore_state["phase"] = "正在检查 MinIO 备份..."
+        has_data = _check_minio_has_data()
+        if _startup_restore_skip_flag.is_set():
+            with _startup_restore_lock:
+                _startup_restore_state["status"] = "skipped"
+                _startup_restore_state["phase"] = "已跳过 MinIO 恢复"
+                _startup_restore_state["finished_at"] = time.time()
+            return
+        if not has_data:
+            logger.info("MinIO bucket is empty (first-time user), skipping restore")
+            with _startup_restore_lock:
+                _startup_restore_state["status"] = "done"
+                _startup_restore_state["phase"] = "MinIO 无备份数据，跳过恢复"
+                _startup_restore_state["finished_at"] = time.time()
+            # Still update last_workspace.txt
+            try:
+                ws = os.environ.get("HERMES_WORKSPACE", "/home/hermes/workspace")
+                state_dir = os.environ.get("HERMES_WEBUI_STATE_DIR", "")
+                if state_dir:
+                    Path(state_dir, "last_workspace.txt").write_text(ws + "\n")
+            except Exception:
+                pass
             return
 
         with _startup_restore_lock:
