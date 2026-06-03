@@ -2410,7 +2410,7 @@ function _renderMinioUnavailableCard(payload) {
         <div class="minio-login-modal-title">登录 MinIO 存储</div>
         <div class="minio-login-hint">用户名为您的邮箱前缀（去掉"."），例如 zhang.san66@byd.com 的用户名为 <strong>zhangsan66</strong></div>
         <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66" oninput="_updateMinioBucketHint()"></label>
-        <label class="minio-login-label">密码<input id="minioLoginSK" class="minio-login-input" type="password" placeholder="密码"></label>
+        <label class="minio-login-label">密码<div class="minio-login-pw-wrap"><input id="minioLoginSK" class="minio-login-input minio-login-pw-input" type="password" placeholder="密码"><button type="button" class="minio-login-pw-toggle" onclick="_toggleMinioPwVisibility()" aria-label="显示密码">👁</button></div></label>
         <div class="minio-login-derived">
           <div class="minio-login-derived-row">Endpoint: <strong>${esc(cfg.endpoint || '—')}</strong> (${cfg.secure ? 'HTTPS' : 'HTTP'})</div>
           <div class="minio-login-derived-row" id="minioLoginBucketHint">存储桶: user-<em>&lt;用户名&gt;</em></div>
@@ -2433,6 +2433,18 @@ function _hideMinioLoginModal(e) {
   if (el) el.style.display = 'none';
   const err = document.getElementById('minioLoginError');
   if (err) err.style.display = 'none';
+}
+function _toggleMinioPwVisibility() {
+  const input = document.getElementById('minioLoginSK');
+  if (!input) return;
+  const btn = input.parentElement.querySelector('.minio-login-pw-toggle');
+  if (input.type === 'password') {
+    input.type = 'text';
+    if (btn) btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    if (btn) btn.textContent = '👁';
+  }
 }
 function _updateMinioBucketHint() {
   const username = (document.getElementById('minioLoginUsername') || {}).value || '';
