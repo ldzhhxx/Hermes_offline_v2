@@ -823,29 +823,32 @@ def clear_startup_restore_skip() -> dict[str, Any]:
 
 
 def _check_minio_has_data() -> bool:
-    """Quick check: does the MinIO bucket/prefix have any objects?
+    """Quick check: does the user's MinIO prefix have any objects?
 
-    Returns True if there's at least one object, False if empty.
-    Uses the minio Python SDK directly (lightweight list call).
+    Returns True if there's at least one object under the prefix, False if empty.
+    If no prefix is configured (first-time user before login), returns False
+    immediately — no point scanning a shared bucket without a prefix.
     """
     try:
         module = _load_minio_sync_module()
         if module is None or not hasattr(module, "get_client"):
-            # Can't check — assume there's data to be safe
             return True
         client = module.get_client()
         bucket = os.environ.get("HERMES_MINIO_BUCKET", "")
         prefix = (os.environ.get("HERMES_MINIO_PREFIX") or "").strip("/")
         if not bucket:
             return False
-        # List just one object to check existence
-        objects = client.list_objects(bucket, prefix=prefix + "/" if prefix else "", recursive=True)
+        if not prefix:
+            # No prefix configured — first-time user, nothing to restore
+            return False
+        # List just one object under this user's prefix
+        objects = client.list_objects(bucket, prefix=prefix + "/", recursive=True)
         for _ in objects:
-            return True  # found at least one object
-        return False  # empty
+            return True
+        return False
     except Exception as exc:
         logger.debug("_check_minio_has_data failed: %s — assuming data exists", exc)
-        return True  # on error, assume data exists so we try the full restore
+        return True
 
 
 def _run_startup_restore():
