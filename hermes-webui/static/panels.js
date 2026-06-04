@@ -2405,6 +2405,8 @@ function _renderMinioUnavailableCard(payload) {
        <div class="minio-unavail-desc" style="font-size:11px;color:var(--muted);margin-bottom:12px">使用已保存的 MinIO 凭证快速连接，无需重新输入</div>`
     : '';
 
+  const intervalSeconds = Number((payload && payload.config && payload.config.sync_interval_seconds) || 300);
+  const intervalLabel = intervalSeconds >= 60 ? `${Math.round(intervalSeconds / 60)} 分钟` : `${intervalSeconds} 秒`;
   return `
     <section class="insights-card minio-sync-panel minio-sync-panel--unavailable" id="minioSyncPanel" aria-label="MinIO 同步控制">
       <div class="minio-unavail-welcome">
@@ -2422,7 +2424,8 @@ function _renderMinioUnavailableCard(payload) {
       <div class="minio-login-modal" onclick="event.stopPropagation()">
         <div class="minio-login-modal-title">登录 MinIO 存储</div>
         <div class="minio-login-hint">用户名为您的邮箱前缀（去掉"."），例如 zhang.san66@byd.com 的用户名为 <strong>zhangsan66</strong></div>
-        <div class="minio-login-warn">⚠️ 此登录仅启用<strong>本地 → 云端</strong>的同步功能（自动同步状态、手动上传工作区）。如需从云端恢复文件，请重启 DiAgent 任务并在启动时选择恢复。</div>
+        <div class="minio-login-warn">⚠️ 登录后将启用<strong>本地 → 云端</strong>同步。首次自动同步将在登录后约 ${intervalLabel} 开始。</div>
+        <div class="minio-login-warn">当前登录不会自动从 MinIO 恢复本地文件；而是把当前环境的数据同步到 MinIO，并可能覆盖远端已有内容。若需从云端恢复，请重启 DiAgent 服务并在启动时选择恢复模式。</div>
         <label class="minio-login-label">用户名<input id="minioLoginUsername" class="minio-login-input" placeholder="例如 zhangsan66"></label>
         <label class="minio-login-label">密码<div class="minio-login-pw-wrap"><input id="minioLoginSK" class="minio-login-input minio-login-pw-input" type="password" placeholder="密码"><button type="button" class="minio-login-pw-toggle" onclick="_toggleMinioPwVisibility()" aria-label="显示密码">👁</button></div></label>
         <div class="minio-login-error" id="minioLoginError" style="display:none"></div>
@@ -2456,6 +2459,25 @@ function _toggleMinioPwVisibility() {
     if (btn) btn.textContent = '👁';
   }
 }
+async function _confirmMinioLoginOperation() {
+  if (!_minioSyncStatusCache || !_minioSyncStatusCache.config || typeof _minioSyncStatusCache.config.sync_interval_seconds !== 'number') {
+    await refreshMinioSyncStatus(true);
+  }
+  const intervalSeconds = Number((_minioSyncStatusCache && _minioSyncStatusCache.config && _minioSyncStatusCache.config.sync_interval_seconds) || 300);
+  const intervalLabel = intervalSeconds >= 60 ? `${Math.round(intervalSeconds / 60)} 分钟` : `${intervalSeconds} 秒`;
+  const message = `登录 MinIO 后会自动开启后台状态同步。首次自动同步将在登录后的 ${intervalLabel} 开始。\n\n该操作不会从 MinIO 恢复当前环境的数据；相反，当前环境的状态将同步到 MinIO，并可能覆盖远端数据。若需从 MinIO 恢复，请重置 DiAgent 服务，并等待启动后的同步完成。\n\n确认继续登录并开启自动同步？`;
+  if (typeof showConfirmDialog === 'function') {
+    return await showConfirmDialog({
+      title: '登录 MinIO 将开启自动同步',
+      message,
+      confirmLabel: '继续登录',
+      danger: true,
+      focusCancel: true,
+    });
+  }
+  return window.confirm(message);
+}
+
 async function _submitMinioLogin() {
   const btn = document.getElementById('minioLoginSubmitBtn');
   const errEl = document.getElementById('minioLoginError');
@@ -2463,6 +2485,9 @@ async function _submitMinioLogin() {
   const username = (document.getElementById('minioLoginUsername') || {}).value.trim();
   const password = (document.getElementById('minioLoginSK') || {}).value.trim();
   if (!username || !password) { _showErr('用户名和密码为必填项'); return; }
+  if (!(await _confirmMinioLoginOperation())) {
+    return;
+  }
   if (btn) { btn.disabled = true; btn.textContent = '连接中…'; }
   if (errEl) errEl.style.display = 'none';
   try {
@@ -2491,6 +2516,9 @@ async function _submitMinioLogin() {
 }
 async function _submitMinioLoginFromEnv() {
   /* Scenario 2: quick reconnect using env vars (skip restore → login) */
+  if (!(await _confirmMinioLoginOperation())) {
+    return;
+  }
   const btn = document.getElementById('minioQuickLoginBtn');
   if (btn) { btn.disabled = true; btn.textContent = '🔄 连接中…'; }
   try {
@@ -2538,6 +2566,8 @@ function _renderMinioSyncPanel(payload) {
   }
   const running = payload.running || {};
   const last = payload.last_result || {};
+  const daemonStatus = payload.daemon || {};
+  const daemonRunning = typeof daemonStatus.running === 'boolean' ? daemonStatus.running : true;
   const stateRunning = !!running.state;
   const wsRunning = !!running.workspace;
 
@@ -2547,6 +2577,7 @@ function _renderMinioSyncPanel(payload) {
   let statusIcon, statusText, statusClass;
   if (isRunning) { statusIcon = '🔄'; statusText = '同步中'; statusClass = 'syncing'; }
   else if (hasError) { statusIcon = '⚠️'; statusText = '同步异常'; statusClass = 'error'; }
+  else if (!daemonRunning) { statusIcon = '⛔'; statusText = '已停止自动同步'; statusClass = 'warn'; }
   else { statusIcon = '✅'; statusText = '已连接 · 自动同步中'; statusClass = 'ok'; }
 
   // Last sync time (relative)
@@ -2595,9 +2626,12 @@ function _renderMinioSyncPanel(payload) {
   const stateTip = `每 ${Math.round(syncInterval / 60)} 分钟自动同步一次，同步内容包括：\n• 会话记录（聊天历史）\n• 技能文件（Skills）\n• 状态数据库（state.db）\n• 日志文件\n\n不同步：配置文件、密码、WebUI 设置\n工作区文件需手动同步`;
   const stateLine = stateRunning
     ? `<span class="minio-state-status minio-state-status--busy" title="${esc(stateTip)}">🔄 状态同步中…</span>`
-    : `<span class="minio-state-status">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
-       <span class="minio-sync-info-trigger has-tooltip has-tooltip--bottom" title="${esc(stateTip)}" aria-label="同步详情">ⓘ</span>
-       <button type="button" id="minioSyncStateBtn" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
+    : !daemonRunning
+      ? `<span class="minio-state-status" title="${esc(stateTip)}">⛔ 自动同步已停止</span>
+         <button type="button" id="minioSyncStateBtn" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`
+      : `<span class="minio-state-status">✓ 自动同步中${stateLastTs ? ' · ' + esc(stateLastTs) : ''}</span>
+         <span class="minio-sync-info-trigger has-tooltip has-tooltip--bottom" title="${esc(stateTip)}" aria-label="同步详情">ⓘ</span>
+         <button type="button" id="minioSyncStateBtn" class="minio-state-sync-link" onclick="triggerMinioStateSync()">立即同步</button>`;
 
   // Workspace entries
   const entriesBlock = _renderMinioWorkspaceEntries(payload);
@@ -3043,6 +3077,7 @@ async function triggerMinioPurgeAndStop() {
     if (resultEl) resultEl.innerHTML = `<div class="minio-sync-result minio-sync-result--err"><span class="minio-sync-result-summary">${esc('请求失败：' + e.message)}</span></div>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '清除数据并停止同步'; }
+    if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus(true);
   }
 }
 

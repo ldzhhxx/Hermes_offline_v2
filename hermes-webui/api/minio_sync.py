@@ -86,6 +86,34 @@ def _clear_skip_flag() -> None:
         pass
 
 
+def _stop_flag_path() -> Path:
+    return Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_sync_stopped"
+
+
+def _set_stop_flag() -> None:
+    try:
+        path = _stop_flag_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(int(time.time())))
+    except Exception:
+        pass
+
+
+def _clear_stop_flag() -> None:
+    try:
+        path = _stop_flag_path()
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def is_minio_stopped() -> bool:
+    try:
+        return _stop_flag_path().exists()
+    except Exception:
+        return False
+
+
 # ── Helpers for status payload ────────────────────────────────────────────
 
 
@@ -361,8 +389,9 @@ def try_minio_login(username: str = "", password: str = "",
     os.environ["HERMES_MINIO_BUCKET"] = bucket
     os.environ["HERMES_MINIO_PREFIX"] = prefix
     os.environ["HERMES_MINIO_SECURE"] = "true" if secure else "false"
-    # Clear skip flag if present
+    # Clear skip/stop flags if present
     _clear_skip_flag()
+    _clear_stop_flag()
     # Invalidate credential probe cache
     _credential_probe_cache["result"] = None
     _credential_probe_cache["expires_at"] = 0.0
@@ -686,7 +715,9 @@ def _spawn_lane(lane: str, args: list[str]) -> dict[str, Any]:
 
 
 def get_status() -> dict[str, Any]:
-    return _snapshot_status()
+    payload = _snapshot_status()
+    payload["daemon"] = get_daemon_status()
+    return payload
 
 
 def get_usage() -> dict[str, Any]:
@@ -729,7 +760,12 @@ def purge_and_stop() -> dict[str, Any]:
 
     result = _run_subprocess(["purge", "--confirm"], timeout=120.0)
 
-    # Stop the background daemon if running (signal via PID file)
+    # Stop the WebUI-managed daemon if it is running.
+    stopped = _stop_webui_daemon_process()
+    if stopped:
+        result["daemon_stopped"] = True
+
+    # Stop the background daemon if running (signal via module hook).
     module = _load_minio_sync_module()
     if module is not None and hasattr(module, "stop_daemon"):
         try:
@@ -737,6 +773,7 @@ def purge_and_stop() -> dict[str, Any]:
         except Exception as exc:
             logger.debug("stop_daemon failed: %s", exc)
 
+    _set_stop_flag()
     return result
 
 
@@ -1116,6 +1153,9 @@ def start_daemon_if_safe() -> dict[str, Any]:
     if is_minio_skipped():
         return {"ok": False, "error": "MinIO 已跳过，不启动 daemon"}
 
+    if is_minio_stopped():
+        return {"ok": False, "error": "MinIO 已停止，不自动启动 daemon"}
+
     with _daemon_lock:
         if _daemon_process is not None and _daemon_process.poll() is None:
             return {"ok": True, "message": "daemon 已在运行"}
@@ -1155,3 +1195,25 @@ def get_daemon_status() -> dict[str, Any]:
             else:
                 return {"running": False, "exit_code": rc}
     return {"running": False}
+
+
+def _stop_webui_daemon_process() -> bool:
+    """Stop the WebUI-managed daemon process if it is currently running."""
+    global _daemon_process
+    with _daemon_lock:
+        proc = _daemon_process
+        if proc is None or proc.poll() is not None:
+            _daemon_process = None
+            return False
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        except Exception as exc:
+            logger.debug("Failed to stop WebUI-managed MinIO daemon: %s", exc)
+        finally:
+            _daemon_process = None
+    return True
