@@ -1,0 +1,26 @@
+{
+  "claudeCode.preferredLocation": "panel",
+  "claudeCode.selectedModel": "mimo-v2.5-pro",
+  "claudeCode.environmentVariables": [
+    {
+      "name": "ANTHROPIC_BASE_URL",
+      "value": "https://token-plan-cn.xiaomimimo.com/anthropic"
+    },
+    {
+      "name": "ANTHROPIC_AUTH_TOKEN",
+      "value": "tp-c0tr8m22jm1htbgwg83jw6encox1axhx25u01v01p5r999gx"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+      "value": "mimo-v2.5-pro"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+      "value": "mimo-v2.5-pro"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+      "value": "mimo-v2.5-pro"
+    }
+  ]
+}

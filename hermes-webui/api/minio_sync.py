@@ -79,6 +79,14 @@ def _has_env_credentials() -> bool:
 def _clear_skip_flag() -> None:
     """Remove the MinIO restore skip flag so the panel reappears."""
     _startup_restore_skip_flag.clear()
+    # Reset in-memory restore state so trigger_startup_restore() can start
+    # a fresh restore (e.g. after login re-enables MinIO).
+    with _startup_restore_lock:
+        if _startup_restore_state["status"] == "skipped":
+            _startup_restore_state["status"] = "idle"
+            _startup_restore_state["skipped"] = False
+            _startup_restore_state["phase"] = ""
+            _startup_restore_state["error"] = None
     try:
         flag = Path(os.environ.get("HERMES_HOME", "/home/hermes/.hermes")) / "webui" / ".minio_restore_skipped"
         flag.unlink(missing_ok=True)
@@ -832,6 +840,13 @@ def get_startup_restore_status() -> dict[str, Any]:
     """
     with _startup_restore_lock:
         state = dict(_startup_restore_state)
+    # If the in-memory state is still "idle" but a skip flag file exists from
+    # a previous session, upgrade to "skipped" so the frontend won't flash the
+    # restore overlay only to dismiss it a moment later.
+    if state["status"] == "idle" and is_minio_skipped():
+        state["status"] = "skipped"
+        state["skipped"] = True
+        state["phase"] = "已跳过 MinIO 恢复，使用本地数据"
     # Fast check: is MinIO enabled? (env var only, no network call)
     cfg = _public_config()
     configured, _ = _config_completeness(cfg)

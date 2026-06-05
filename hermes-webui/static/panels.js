@@ -2503,7 +2503,8 @@ async function _submitMinioLogin() {
     const data = await resp.json();
     if (data.ok) {
       _hideMinioLoginModal();
-      refreshMinioSyncStatus(true);
+      mountWorkspaceMinioSync();
+      _postLoginRestore();
     } else {
       _showErr(data.error || '连接失败');
     }
@@ -2529,7 +2530,8 @@ async function _submitMinioLoginFromEnv() {
     });
     const data = await resp.json();
     if (data.ok) {
-      if (typeof refreshMinioSyncStatus === 'function') refreshMinioSyncStatus(true);
+      mountWorkspaceMinioSync();
+      _postLoginRestore();
     } else {
       if (btn) { btn.disabled = false; btn.textContent = '⚡ 一键恢复连接'; }
       alert('自动连接失败: ' + (data.error || '未知错误') + '\n请手动输入用户名和密码登录');
@@ -2538,6 +2540,35 @@ async function _submitMinioLoginFromEnv() {
     if (btn) { btn.disabled = false; btn.textContent = '⚡ 一键恢复连接'; }
     alert('请求失败: ' + (ex.message || ex));
   }
+}
+async function _postLoginRestore() {
+  /* After login: trigger restore if needed, then start the sync daemon. */
+  try {
+    const triggerResult = await api('/api/minio/startup-restore/trigger', {
+      method: 'POST', body: JSON.stringify({})
+    });
+    if (!triggerResult) return;
+    if (triggerResult.status === 'running') {
+      // Restore started — show overlay and poll; daemon starts on completion.
+      const overlay = document.getElementById('minioRestoreOverlay');
+      if (overlay) {
+        overlay.style.display = 'flex';
+        _minioRestoreStartTime = Date.now();
+        _minioRestoreTimer = setInterval(() => {
+          const elapsed = Math.floor((Date.now() - _minioRestoreStartTime) / 1000);
+          const timerEl = document.getElementById('minioRestoreTimer');
+          if (timerEl) timerEl.textContent = `已等待 ${elapsed} 秒`;
+        }, 1000);
+        _minioRestorePolling = true;
+        _pollMinioRestore();
+      }
+    } else {
+      // done / skipped / not_configured — restore not needed.
+      // Start daemon (enables auto-sync) and refresh the panel.
+      api('/api/minio/daemon/start', { method: 'POST', body: JSON.stringify({}) }).catch(() => {});
+      mountWorkspaceMinioSync();
+    }
+  } catch (_) { /* tolerated */ }
 }
 function _renderMinioSkeleton() {
   // Lightweight skeleton shown while the status API is loading.
@@ -6840,13 +6871,31 @@ async function _initMinioStartupRestore() {
       return;
     }
     if (restoreStatus.status === 'skipped' || restoreStatus.status === 'failed') {
-      const mount = document.getElementById('workspaceMinioSyncMount');
-      if (mount) { mount.innerHTML = ''; mount.hidden = true; }
+      // Skipped or failed from a previous session — nothing to restore.
+      // Bootstrap 1 (mountWorkspaceMinioSync) already rendered the appropriate
+      // card via /api/minio/sync/status.  Do NOT touch the mount.
       return;
     }
 
     // status === 'idle' → MinIO enabled, restore not yet attempted.
-    // Show overlay IMMEDIATELY, then trigger restore.
+    // Trigger the restore.  The backend's trigger_startup_restore() checks
+    // the skip flag file *before* actually starting, so if the user skipped
+    // in a previous session it returns "skipped" immediately — no overlay.
+    const triggerResult = await api('/api/minio/startup-restore/trigger', {
+      method: 'POST', body: JSON.stringify({})
+    });
+
+    if (!triggerResult) return;
+
+    if (triggerResult.status === 'skipped' || triggerResult.status === 'done'
+        || triggerResult.status === 'not_configured') {
+      // No overlay needed — either already done/skipped or not configured.
+      // Bootstrap 1 already rendered the right card; just refresh it.
+      mountWorkspaceMinioSync();
+      return;
+    }
+
+    // status === 'running' → show overlay and poll for completion.
     overlay.style.display = 'flex';
     _minioRestoreStartTime = Date.now();
 
@@ -6855,21 +6904,6 @@ async function _initMinioStartupRestore() {
       const timerEl = document.getElementById('minioRestoreTimer');
       if (timerEl) timerEl.textContent = `已等待 ${elapsed} 秒`;
     }, 1000);
-
-    const triggerResult = await api('/api/minio/startup-restore/trigger', {
-      method: 'POST', body: JSON.stringify({})
-    });
-
-    if (!triggerResult) {
-      _hideMinioRestoreOverlay();
-      return;
-    }
-
-    if (triggerResult.status === 'done' || triggerResult.status === 'skipped'
-        || triggerResult.status === 'not_configured') {
-      _finishMinioRestoreOverlay(triggerResult.status);
-      return;
-    }
 
     _minioRestorePolling = true;
     _pollMinioRestore();
@@ -6943,13 +6977,10 @@ function _finishMinioRestoreOverlay(status) {
     const mount = document.getElementById('workspaceMinioSyncMount');
     if (mount) { mount.innerHTML = ''; mount.hidden = true; }
   } else {
-    // skipped — NO daemon, NO MinIO panel. _snapshot_status now returns
-    // configured=false when skipped, so mountWorkspaceMinioSync will render
-    // the "unavailable" card. We hide the mount entirely to avoid showing
-    // a confusing "login" button when the user intentionally skipped.
+    // skipped — hide overlay, then let mountWorkspaceMinioSync render the
+    // "unavailable" card (with quick-reconnect button when skip_flag_exists).
     _hideMinioRestoreOverlay();
-    const mount = document.getElementById('workspaceMinioSyncMount');
-    if (mount) { mount.innerHTML = ''; mount.hidden = true; }
+    mountWorkspaceMinioSync();
   }
 }
 
